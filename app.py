@@ -7,7 +7,7 @@ import tempfile
 
 from src.parser import parse_pdf
 from src.processor import build_outputs
-from src.exporters import df_to_pdf_bytes, dfs_to_excel_bytes
+from src.exporters import df_to_pdf_bytes, dfs_to_excel_bytes, df_to_template_excel_bytes
 
 # --- Rutas de assets ---
 HERE = Path(__file__).parent
@@ -120,7 +120,7 @@ if docs:
 if st.session_state.parsed_docs:
     outputs = build_outputs(st.session_state.parsed_docs, st.session_state.files_meta)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Ventas", "Compras", "Gastos", "Control Hacienda", "Descargas"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Ventas", "Compras", "Gastos (detalle)", "Control Hacienda", "Descargas"])
 
     with tab1:
         st.subheader("Grilla de Ventas")
@@ -134,13 +134,13 @@ if st.session_state.parsed_docs:
             disabled=dfv.empty,
         )
         # Libro ventas (Excel)
-        st.subheader("Ventas (Emitidos Salida) - Excel")
+        st.subheader("Ventas - Excel")
         dflv = outputs["ventas_salida"]
         st.dataframe(dflv, use_container_width=True, hide_index=True)
         st.download_button(
-            "Descargar Ventas (Emitidos Salida).xlsx",
-            data=dfs_to_excel_bytes({"Salida": dflv}),
-            file_name="ventas_emitidos_salida.xlsx",
+            "Descargar Ventas.xlsx",
+            data=df_to_template_excel_bytes(str(HERE / 'templates' / 'emitidos_salida.xlsx'), dflv),
+            file_name="ventas.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             disabled=dflv.empty,
         )
@@ -157,14 +157,26 @@ if st.session_state.parsed_docs:
             disabled=dfc.empty,
         )
 
+
+        # Compras/Gastos (Excel)
+        st.subheader("Compras/Gastos - Excel")
+        dfcg = outputs.get("compras_gastos_salida", pd.DataFrame())
+        st.dataframe(style_df(dfcg), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar Compras_Gastos.xlsx",
+            data=df_to_template_excel_bytes(str(HERE / "templates" / "recibidos_salida.xlsx"), dfcg),
+            file_name="compras_gastos.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=dfcg.empty,
+        )
     with tab3:
-        st.subheader("Gastos / Comisiones (Recibidos Salida) - Excel")
-        dfg = outputs["gastos_salida"]
+        st.subheader("Gastos (detalle)")
+        dfg = outputs["gastos"]
         st.dataframe(style_df(dfg), use_container_width=True, hide_index=True)
         st.download_button(
-            "Descargar Gastos.xlsx",
-            data=dfs_to_excel_bytes({"Salida": dfg}),
-            file_name="gastos_recibidos_salida.xlsx",
+            "Descargar Gastos_Detalle.xlsx",
+            data=dfs_to_excel_bytes({"Detalle": dfg}),
+            file_name="gastos_detalle.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             disabled=dfg.empty,
         )
@@ -198,8 +210,8 @@ if st.session_state.parsed_docs:
         sheets = {
             "Ventas": outputs["ventas"],
             "Compras": outputs["compras"],
-            "Ventas_Emitidos_Salida": outputs["ventas_salida"],
-            "Gastos_Recibidos_Salida": outputs["gastos_salida"],
+            "Ventas_Salida": outputs["ventas_salida"],
+            "Compras_Gastos_Salida": outputs.get("compras_gastos_salida", pd.DataFrame()),
             "Ctrl_Ventas_Resumen": outputs["ctrl_ventas_resumen"],
             "Ctrl_Compras_Resumen": outputs["ctrl_compras_resumen"],
         }
@@ -210,12 +222,11 @@ if st.session_state.parsed_docs:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-st.caption("Nota: el 'Monto Neto (sin gastos)' del Control Hacienda se calcula como el Importe Bruto de la hacienda (base), excluyendo gastos/comisiones e IVA.")
 
 
-st.markdown("---")
 st.markdown(
-    "<div style='text-align:center; color:#6b6b6b; font-size:0.85rem;'>Herramienta para uso interno | Developer Alfonso Alderete</div>",
-    unsafe_allow_html=True,
 )
 
+
+st.markdown('---')
+st.caption('Herramienta para uso interno | Developer Alfonso Alderete')
