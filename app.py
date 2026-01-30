@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 from pathlib import Path
 from io import BytesIO
 import tempfile
@@ -10,11 +11,11 @@ from src.exporters import df_to_pdf_bytes, dfs_to_excel_bytes
 
 # --- Rutas de assets ---
 HERE = Path(__file__).parent
-LOGO = HERE / "assets" / "logo_aie.png"
-FAVICON = HERE / "assets" / "favicon-aie.ico"
+LOGO = HERE / "aie-logo.png"
+FAVICON = HERE / "aiefavicon.ico"
 
 st.set_page_config(
-    page_title="Liquidaciones de Hacienda (ARCA/LSP) → AIE",
+    page_title="Liquidaciones de Hacienda (ARCA) → Compras / Ventas",
     page_icon=str(FAVICON) if FAVICON.exists() else "📄",
     layout="wide",
 )
@@ -27,66 +28,88 @@ with c1:
     else:
         st.markdown("### AIE")
 with c2:
-    st.markdown("## Liquidaciones de Hacienda (ARCA/LSP) → Compras / Ventas")
-    st.caption("Herramienta para uso interno | Developer Alfonso Alderete")
-
+    st.markdown("## Liquidaciones de Hacienda (ARCA) → Compras / Ventas")
 st.divider()
 
+
+def _fmt_ar(x, decimals=2):
+    try:
+        v = float(x)
+    except Exception:
+        return x
+    s = f"{v:,.{decimals}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+def style_df(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    money_pat = re.compile(r"(NETO|IVA|GASTO|IMPORTE|MONTO|BRUTO|TOTAL|PRECIO|COMISI|OTROS)", re.I)
+    qty_pat = re.compile(r"(CABEZA|CANTIDAD)", re.I)
+    kilos_pat = re.compile(r"KILO", re.I)
+
+    fmt = {}
+    for c in df.columns:
+        if money_pat.search(str(c)):
+            fmt[c] = lambda v, _d=2: _fmt_ar(v, _d)
+        elif kilos_pat.search(str(c)):
+            fmt[c] = lambda v, _d=2: _fmt_ar(v, _d)
+        elif qty_pat.search(str(c)):
+            fmt[c] = lambda v, _d=0: _fmt_ar(v, _d)
+    return df.style.format(fmt, na_rep="")
+
+
+
 st.markdown("### 1) Subir comprobantes (PDF)")
-uploaded = st.file_uploader("Seleccioná uno o varios PDFs", type=["pdf"], accept_multiple_files=True)
+col_u1, col_u2 = st.columns(2)
+with col_u1:
+    uploaded_emisor = st.file_uploader("Subir archivos como **EMISOR**", type=["pdf"], accept_multiple_files=True, key="up_emisor")
+with col_u2:
+    uploaded_receptor = st.file_uploader("Subir archivos como **RECEPTOR**", type=["pdf"], accept_multiple_files=True, key="up_receptor")
+
 
 if "files_meta" not in st.session_state:
     st.session_state.files_meta = {}
 if "parsed_docs" not in st.session_state:
-    st.session_state.parsed_docs = []
-
-tmp_dir = Path(tempfile.gettempdir()) / "aie_hacienda_uploads"
-tmp_dir.mkdir(parents=True, exist_ok=True)
-
+    st.session_state.parsed_
 docs = []
 roles = {}
 
-if uploaded:
-    st.markdown("### 2) Definir rol (EMISOR / RECEPTOR)")
-    st.info("El mismo comprobante puede ser compra o venta según el rol. Seleccioná cómo figura tu parte en cada PDF.")
-    for uf in uploaded:
-        # Guardar a tmp
+def _parse_uploaded(files, role_label: str):
+    if not files:
+        return
+    for uf in files:
         tmp_path = tmp_dir / uf.name
         tmp_path.write_bytes(uf.getbuffer())
-        # Parse preliminar
         try:
             doc = parse_pdf(str(tmp_path))
             docs.append(doc)
+            roles[doc.filename] = role_label
         except Exception as e:
             st.error(f"No pude leer {uf.name}: {e}")
-            continue
 
-    # UI roles
+_parse_uploaded(uploaded_emisor, "EMISOR")
+_parse_uploaded(uploaded_receptor, "RECEPTOR")
+
+if docs:
+    st.markdown("### 2) Vista previa (rol asignado por subida)")
     for d in docs:
-        with st.expander(f"{d.filename} | Cód {d.cod_arca} {d.letra} {d.pv}-{d.numero} | {d.titulo}", expanded=True):
-            colA, colB, colC = st.columns([2,2,6])
+        role = roles.get(d.filename, "RECEPTOR")
+        with st.expander(f"{d.filename} | {role} | Cód {d.cod_arca} {d.letra} {d.pv}-{d.numero} | {d.titulo}", expanded=False):
+            colA, colB = st.columns([2, 8])
             with colA:
-                role = st.selectbox(
-                    "Soy",
-                    options=["RECEPTOR", "EMISOR"],
-                    index=0,
-                    key=f"role_{d.filename}",
-                )
-                roles[d.filename] = role
-            with colB:
+                st.write("**Soy:**", role)
                 st.write("**Fecha:**", d.fecha or "-")
                 st.write("**F. Operación:**", d.fecha_operacion or "-")
-            with colC:
-                st.write("**Emisor:**", f"{d.emisor.nombre} (CUIT {d.emisor.cuit}) - {d.emisor.cond_iva}")
-                st.write("**Receptor:**", f"{d.receptor.nombre} (CUIT {d.receptor.cuit}) - {d.receptor.cond_iva}")
                 if d.ajuste.es_ajuste:
                     st.warning(f"Ajuste detectado: {d.ajuste.tipo or ''} {d.ajuste.sentido or ''}")
+            with colB:
+                st.write("**Emisor:**", f"{d.emisor.nombre} (CUIT {d.emisor.cuit}) - {d.emisor.cond_iva}")
+                st.write("**Receptor:**", f"{d.receptor.nombre} (CUIT {d.receptor.cuit}) - {d.receptor.cond_iva}")
 
     st.divider()
     if st.button("Procesar", type="primary"):
         st.session_state.parsed_docs = docs
         st.session_state.files_meta = roles
         st.success("Listo. Procesado.")
+
 
 # Resultados
 if st.session_state.parsed_docs:
@@ -97,7 +120,7 @@ if st.session_state.parsed_docs:
     with tab1:
         st.subheader("Grilla de Ventas")
         dfv = outputs["ventas"]
-        st.dataframe(dfv, use_container_width=True, hide_index=True)
+        st.dataframe(style_df(dfv), use_container_width=True, hide_index=True)
         st.download_button(
             "Descargar PDF Ventas",
             data=df_to_pdf_bytes(dfv, title="Grilla de Ventas"),
@@ -106,13 +129,13 @@ if st.session_state.parsed_docs:
             disabled=dfv.empty,
         )
         # Libro ventas (Excel)
-        st.subheader("Libro IVA Ventas (Excel)")
-        dflv = outputs["libro_ventas"]
+        st.subheader("Ventas (Emitidos Salida) - Excel")
+        dflv = outputs["ventas_salida"]
         st.dataframe(dflv, use_container_width=True, hide_index=True)
         st.download_button(
-            "Descargar Libro IVA Ventas.xlsx",
-            data=dfs_to_excel_bytes({"Libro_Ventas": dflv}),
-            file_name="libro_ventas.xlsx",
+            "Descargar Ventas (Emitidos Salida).xlsx",
+            data=dfs_to_excel_bytes({"Salida": dflv}),
+            file_name="ventas_emitidos_salida.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             disabled=dflv.empty,
         )
@@ -120,7 +143,7 @@ if st.session_state.parsed_docs:
     with tab2:
         st.subheader("Grilla de Compras")
         dfc = outputs["compras"]
-        st.dataframe(dfc, use_container_width=True, hide_index=True)
+        st.dataframe(style_df(dfc), use_container_width=True, hide_index=True)
         st.download_button(
             "Descargar PDF Compras",
             data=df_to_pdf_bytes(dfc, title="Grilla de Compras"),
@@ -130,13 +153,13 @@ if st.session_state.parsed_docs:
         )
 
     with tab3:
-        st.subheader("Gastos / Comisiones (para planilla ND)")
-        dfg = outputs["gastos"]
-        st.dataframe(dfg, use_container_width=True, hide_index=True)
+        st.subheader("Gastos / Comisiones (Recibidos Salida) - Excel")
+        dfg = outputs["gastos_salida"]
+        st.dataframe(style_df(dfg), use_container_width=True, hide_index=True)
         st.download_button(
             "Descargar Gastos.xlsx",
-            data=dfs_to_excel_bytes({"Gastos": dfg}),
-            file_name="gastos.xlsx",
+            data=dfs_to_excel_bytes({"Salida": dfg}),
+            file_name="gastos_recibidos_salida.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             disabled=dfg.empty,
         )
@@ -144,7 +167,7 @@ if st.session_state.parsed_docs:
     with tab4:
         st.subheader("Control Hacienda - Ventas")
         dv_res = outputs["ctrl_ventas_resumen"]
-        st.dataframe(dv_res, use_container_width=True, hide_index=True)
+        st.dataframe(style_df(dv_res), use_container_width=True, hide_index=True)
         st.download_button(
             "Descargar Control Hacienda Ventas.xlsx",
             data=dfs_to_excel_bytes({"Resumen": dv_res, "Detalle": outputs["ctrl_ventas_detalle"]}),
@@ -155,7 +178,7 @@ if st.session_state.parsed_docs:
 
         st.subheader("Control Hacienda - Compras")
         dc_res = outputs["ctrl_compras_resumen"]
-        st.dataframe(dc_res, use_container_width=True, hide_index=True)
+        st.dataframe(style_df(dc_res), use_container_width=True, hide_index=True)
         st.download_button(
             "Descargar Control Hacienda Compras.xlsx",
             data=dfs_to_excel_bytes({"Resumen": dc_res, "Detalle": outputs["ctrl_compras_detalle"]}),
@@ -170,8 +193,8 @@ if st.session_state.parsed_docs:
         sheets = {
             "Ventas": outputs["ventas"],
             "Compras": outputs["compras"],
-            "Libro_Ventas": outputs["libro_ventas"],
-            "Gastos": outputs["gastos"],
+            "Ventas_Emitidos_Salida": outputs["ventas_salida"],
+            "Gastos_Recibidos_Salida": outputs["gastos_salida"],
             "Ctrl_Ventas_Resumen": outputs["ctrl_ventas_resumen"],
             "Ctrl_Compras_Resumen": outputs["ctrl_compras_resumen"],
         }
@@ -183,3 +206,11 @@ if st.session_state.parsed_docs:
         )
 
 st.caption("Nota: el 'Monto Neto (sin gastos)' del Control Hacienda se calcula como el Importe Bruto de la hacienda (base), excluyendo gastos/comisiones e IVA.")
+
+
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; color:#6b6b6b; font-size:0.85rem;'>Herramienta para uso interno | Developer Alfonso Alderete</div>",
+    unsafe_allow_html=True,
+)
+
