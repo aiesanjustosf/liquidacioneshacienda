@@ -22,6 +22,7 @@ EMITIDOS_SALIDA_COLS = [
     "Nro. Doc. Emisor",
     "Denominación Emisor",
     "Condición Fiscal",
+    "TD",
     "Tipo Cambio",
     "Moneda",
     "Alicuota",
@@ -45,6 +46,7 @@ RECIBIDOS_SALIDA_COLS = [
     "C.P.",
     "Pcia",
     "Cond Fisc",
+    "TD",
     "Moneda",
     "Tipo de cambio",
     "Cód. Neto",
@@ -163,10 +165,11 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Punto de Venta": d.pv,
                 "Número Desde": d.numero,
                 "Número Hasta": d.numero,
-                "Tipo Doc. Emisor": "CUIT",
+                "Tipo Doc. Emisor": 80,
                 "Nro. Doc. Emisor": d.emisor.cuit,
                 "Denominación Emisor": d.emisor.nombre,
                 "Condición Fiscal": d.emisor.cond_iva,
+                "TD": 80,
                 "Tipo Cambio": 1,
                 "Moneda": "PES",
                 "Alicuota": alic if alic else "",
@@ -177,7 +180,39 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Total": (neto_col or 0.0) + (iva_hacienda or 0.0) + (exng_col or 0.0),
             })
 
-        # Gastos detalle
+        
+            # Retenciones / Impuestos (fila adicional en Otros Conceptos, en positivo, en negrita)
+            for _lbl, _amt in (getattr(d, "retenciones", None) or []):
+                try:
+                    _v = float(_amt)
+                except Exception:
+                    _v = 0.0
+                if _v:
+                    ventas_salida_rows.append({
+                        "Fecha Emisión": d.fecha,
+                        "Fecha Recepción": d.fecha_operacion or d.fecha,
+                        "Concepto": 141,
+                        "Tipo": d.tipo_interno,
+                        "Letra": d.letra,
+                        "Punto de Venta": d.pv,
+                        "Número Desde": d.numero,
+                        "Número Hasta": d.numero,
+                        "Tipo Doc. Emisor": 80,
+                        "Nro. Doc. Emisor": d.emisor.cuit,
+                        "Denominación Emisor": d.emisor.nombre,
+                        "Condición Fiscal": d.emisor.cond_iva,
+                        "TD": 80,
+                        "Tipo Cambio": 1,
+                        "Moneda": "PES",
+                        "Alicuota": "",
+                        "Neto": 0.0,
+                        "IVA": 0.0,
+                        "Ex/Ng": 0.0,
+                        "Otros Conceptos": _v,
+                        "Total": _v,
+                        "__bold__": True,
+                    })
+# Gastos detalle
         for g in d.gastos:
             gastos_rows.append({
                 "Movimiento": mov,
@@ -201,9 +236,46 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
         # --- Compras/Gastos (formato "Recibidos Salida") ---
         def _append_recibidos_row(*, fecha: str, cpbte: str, letra: str, suc: str, numero: str,
                                   contraparte_nombre: str, contraparte_cuit: str, cond_fisc: str,
-                                  cod_neto: str, base: float, iva_pct: float | str, iva_imp: float,
-                                  cod_ngex: str = "", concepto_ngex: float | str = "") -> None:
-            total = (base or 0.0) + (iva_imp or 0.0)
+                                  cod_neto: int | str, base: float,
+                                  iva_pct: float | str = "", iva_imp: float = 0.0,
+                                  cod_ngex: int | str = "", concepto_ngex: float | str = "",
+                                  force_neto_no_iva: bool = False,
+                                  force_exento: bool = False,
+                                  td: int = 80) -> None:
+            """Agrega una fila al Excel Recibidos/Salida (Compras/Gastos).
+            - `force_neto_no_iva`: para MT (Neto con alícuota 0, sin IVA) aun si `iva_imp` es 0.
+            - `force_exento`: para gastos exentos (monto en Conceptos NG/EX).
+            """
+            # Columnas calculadas
+            neto_gravado = ""
+            alic = ""
+            iva_liq = ""
+            cod_ng = ""
+            conc_ng = ""
+
+            if force_exento:
+                cod_ng = str(cod_ngex) if str(cod_ngex) else str(cod_neto)
+                conc_ng = base
+            else:
+                if (iva_imp or 0.0) != 0.0 or force_neto_no_iva:
+                    neto_gravado = base
+                    # alícuota 0 para MT
+                    if force_neto_no_iva and (iva_imp or 0.0) == 0.0:
+                        alic = 0.0
+                        iva_liq = 0.0
+                    else:
+                        alic = iva_pct if (iva_imp or 0.0) != 0.0 else ""
+                        iva_liq = iva_imp if (iva_imp or 0.0) != 0.0 else 0.0
+                else:
+                    cod_ng = str(cod_ngex) if str(cod_ngex) else ""
+                    conc_ng = concepto_ngex if concepto_ngex != "" else base
+
+            # Total
+            total = 0.0
+            for v in (neto_gravado, iva_liq, conc_ng):
+                if isinstance(v, (int, float)):
+                    total += float(v)
+
             row = {
                 "Fecha dd/mm/aaaa": fecha,
                 "Cpbte": cpbte,
@@ -211,21 +283,22 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Suc.": suc,
                 "Número": numero,
                 "Razón Social o Denominación Cliente": contraparte_nombre,
-                "Tipo Doc.": "CUIT",
+                "Tipo Doc.": td,
                 "CUIT": contraparte_cuit,
                 "Domicilio": "",
                 "C.P.": "",
                 "Pcia": "",
                 "Cond Fisc": cond_fisc,
+                "TD": td,
                 "Moneda": "PES",
                 "Tipo de cambio": 1,
-                "Cód. Neto": cod_neto,
-                "Neto Gravado": base if (iva_imp or 0.0) != 0.0 else 0.0,
-                "Alíc.": iva_pct if (iva_imp or 0.0) != 0.0 else "",
-                "IVA Liquidado": iva_imp if (iva_imp or 0.0) != 0.0 else "",
+                "Cód. Neto": int(cod_neto) if str(cod_neto).strip() else "",
+                "Neto Gravado": neto_gravado,
+                "Alíc.": alic,
+                "IVA Liquidado": iva_liq,
                 "IVA Débito": 0.0,
-                "Cód. NG/EX": cod_ngex if (iva_imp or 0.0) == 0.0 else "",
-                "Conceptos NG/EX": concepto_ngex if (iva_imp or 0.0) == 0.0 else "",
+                "Cód. NG/EX": int(cod_ng) if str(cod_ng).strip().isdigit() else (cod_ng if cod_ng else ""),
+                "Conceptos NG/EX": conc_ng,
                 "Cód. P/R": "",
                 "Perc./Ret.": "",
                 "Pcia P/R": "",
@@ -253,8 +326,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         base=base,
                         iva_pct="",
                         iva_imp=0.0,
-                        cod_ngex="EX",
-                        concepto_ngex=base,
+                        force_neto_no_iva=True,
                     )
                 else:
                     _append_recibidos_row(
@@ -272,25 +344,47 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         iva_imp=iva_imp,
                     )
 
-        # Línea 400 (gastos) para compras y también incluir gastos de ventas
+        # Línea 400 (gastos) para compras y también incluir gastos de ventas (ND/NC según signo)
         if (d.total_gastos or 0.0) != 0.0:
             base_g = (d.total_gastos or 0.0) * s_m
             iva_g = (d.iva_gastos or 0.0) * s_m
-            alic_g = round((iva_g / base_g) * 100, 2) if base_g else ""
-            _append_recibidos_row(
-                fecha=d.fecha,
-                cpbte="ND",
-                letra="A",
-                suc=d.pv,
-                numero=d.numero,
-                contraparte_nombre=contraparte.nombre,
-                contraparte_cuit=contraparte.cuit,
-                cond_fisc=contraparte.cond_iva,
-                cod_neto="400",
-                base=base_g,
-                iva_pct=alic_g if iva_g else "",
-                iva_imp=iva_g if iva_g else 0.0,
-            )
+
+            cpbte_g = "ND" if base_g >= 0 else "NC"
+            letra_g = "A"  # según tu regla general
+            alic_g = round((iva_g / base_g) * 100, 3) if base_g and iva_g else 0.0
+
+            if (iva_g or 0.0) == 0.0:
+                # gasto exento => a Conceptos NG/EX (cód 400)
+                _append_recibidos_row(
+                    fecha=d.fecha,
+                    cpbte=cpbte_g,
+                    letra=letra_g,
+                    suc=d.pv,
+                    numero=d.numero,
+                    contraparte_nombre=contraparte.nombre,
+                    contraparte_cuit=contraparte.cuit,
+                    cond_fisc=contraparte.cond_iva,
+                    cod_neto=400,
+                    base=base_g,
+                    force_exento=True,
+                    cod_ngex=400,
+                    concepto_ngex=base_g,
+                )
+            else:
+                _append_recibidos_row(
+                    fecha=d.fecha,
+                    cpbte=cpbte_g,
+                    letra=letra_g,
+                    suc=d.pv,
+                    numero=d.numero,
+                    contraparte_nombre=contraparte.nombre,
+                    contraparte_cuit=contraparte.cuit,
+                    cond_fisc=contraparte.cond_iva,
+                    cod_neto=400,
+                    base=base_g,
+                    iva_pct=alic_g,
+                    iva_imp=iva_g,
+                )
 
 
 # Control hacienda: sólo si hay items; monto neto sin gastos = suma de bruto de items
@@ -298,6 +392,8 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             for it in d.items:
                 row = {
                     "Tipo de Hacienda": it.categoria,
+                    "UM": it.um,
+                    "Precio ($ UM)": (it.precio or 0.0),
                     "Cantidad (Cabezas)": (it.cabezas or 0.0) * (s_h),
                     "Kilos": (it.kilos or 0.0) * (s_h),
                     "Monto Neto (sin gastos)": (it.bruto or 0.0) * (s_m),
@@ -361,11 +457,12 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             return df_detail, df_detail
         resumen = (
             df_detail
-            .groupby("Tipo de Hacienda", as_index=False)
+            .groupby(["Tipo de Hacienda","UM"], as_index=False)
             .agg({
                 "Cantidad (Cabezas)": "sum",
                 "Kilos": "sum",
                 "Monto Neto (sin gastos)": "sum",
+                "Precio ($ UM)": lambda s: s.iloc[0] if len(set([v for v in s if pd.notna(v)])) <= 1 else "",
             })
         )
         return df_detail, resumen
@@ -378,7 +475,11 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
 
     df_libro_ventas = pd.DataFrame(libro_ventas_rows)
 
-    df_ventas_salida = pd.DataFrame(ventas_salida_rows, columns=EMITIDOS_SALIDA_COLS)
+    df_ventas_salida = pd.DataFrame(ventas_salida_rows)
+    # Mantener columna interna __bold__ para formateo en export
+    if "__bold__" not in df_ventas_salida.columns:
+        df_ventas_salida["__bold__"] = False
+    df_ventas_salida = df_ventas_salida.reindex(columns=[*EMITIDOS_SALIDA_COLS, "__bold__"], fill_value="")
     df_compras_gastos_salida = pd.DataFrame(compras_gastos_salida_rows, columns=RECIBIDOS_SALIDA_COLS)
 
     return {

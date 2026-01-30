@@ -120,39 +120,75 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
 from openpyxl import load_workbook
 
 def df_to_template_excel_bytes(template_path: str, df: pd.DataFrame, sheet_name: str = "Salida") -> bytes:
-    """Carga un template XLSX y vuelca el DataFrame respetando encabezados del template."""
+    """Carga un template XLSX y vuelca el DataFrame respetando encabezados del template.
+    - Soporta columna interna `__bold__` (no se escribe; solo aplica negrita en la fila).
+    - Aplica formatos numéricos compatibles con Excel (miles/decimales según configuración regional del usuario).
+    """
+    from openpyxl.styles import Font
+
     output = BytesIO()
     wb = load_workbook(template_path)
-    if sheet_name not in wb.sheetnames:
-        ws = wb.active
-    else:
-        ws = wb[sheet_name]
+    ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
 
-    # Buscar fila de encabezados (asumimos primera fila)
     header_row = 1
     headers = [ws.cell(header_row, c).value for c in range(1, ws.max_column + 1)]
-    # Mapear columnas del DF a posiciones
-    col_to_idx = {h: i+1 for i, h in enumerate(headers) if h not in (None, "")}
+    col_to_idx = {h: i + 1 for i, h in enumerate(headers) if h not in (None, "")}
 
-    # Limpiar filas existentes debajo del header (mantener estilos de la fila 2 si existe)
+    # Limpiar filas existentes debajo del header
     if ws.max_row > header_row:
         ws.delete_rows(header_row + 1, ws.max_row - header_row)
 
-    # Escribir filas
     if df is None:
         df = pd.DataFrame()
 
+    # helper: set number formats
+    def _apply_fmt(cell, colname: str, val):
+        up = (colname or "").upper()
+        if val is None or val == "":
+            return
+        if isinstance(val, (int, float)):
+            if "ALIC" in up:
+                cell.number_format = "0.000"
+            elif re.search(r"(CABEZA|CANTIDAD)", up):
+                cell.number_format = "#,##0"
+            elif "KILO" in up:
+                cell.number_format = "#,##0.00"
+            elif re.search(r"(NETO|IVA|GASTO|IMPORTE|MONTO|BRUTO|TOTAL|PRECIO|COMISI|OTROS|CONCEP)", up):
+                cell.number_format = "#,##0.00"
+            elif re.search(r"(COD|CÓD)", up):
+                cell.number_format = "0"
+            elif "TD" == up or "TIPO DOC" in up:
+                cell.number_format = "0"
+
+    # Escribir filas
     for r, (_, row) in enumerate(df.iterrows(), start=header_row + 1):
+        is_bold = False
+        if "__bold__" in row.index and bool(row.get("__bold__")):
+            is_bold = True
+
         for col, val in row.items():
+            if col == "__bold__":
+                continue
             if col not in col_to_idx:
                 continue
             c = col_to_idx[col]
             cell = ws.cell(r, c)
-            # valores NaN -> vacío
             if pd.isna(val):
                 cell.value = None
             else:
                 cell.value = val
+            _apply_fmt(cell, col, cell.value)
+
+        if is_bold:
+            for c in range(1, ws.max_column + 1):
+                ws.cell(r, c).font = Font(bold=True)
+
+    # Ancho de columnas (auto simple)
+    for c in range(1, ws.max_column + 1):
+        letter = get_column_letter(c)
+        hdr = ws.cell(header_row, c).value
+        if hdr:
+            ws.column_dimensions[letter].width = min(45, max(10, len(str(hdr)) + 2))
 
     wb.save(output)
     return output.getvalue()

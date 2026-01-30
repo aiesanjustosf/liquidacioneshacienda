@@ -55,7 +55,7 @@ def money_tokens(line: str) -> List[str]:
     Devuelve importes monetarios tipo 1,234.56 o 1234.56.
     Excluye porcentajes como 10.50 (sin coma y < 4 dígitos).
     """
-    toks = re.findall(r"\b\d[\d,]*\.\d{2}\b", line)
+    toks = re.findall(r"\b\d[\d,]*\.\d{1,2}\b", line)
     filtered = [m for m in toks if ("," in m or len(m.split(".")[0]) >= 4)]
     return filtered
 
@@ -125,6 +125,7 @@ class ParsedDoc:
     total_gastos: float
     iva_gastos: float
     importe_neto: float
+    retenciones: List[Tuple[str, float]]
     # Detalle
     items: List[ItemHacienda]
     gastos: List[Gasto]
@@ -183,7 +184,7 @@ def parse_parties(text: str) -> Tuple[Party, Party]:
                 nombre = cand
             break
     if not nombre:
-        nombre = _find_one(r"(?:Raz[oó]n Social|Nombre y Apellido):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+)", emisor_block)
+        nombre = _find_one(r"(?:Raz[oó]n Social|Nombre y Apellido):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+?)(?:\n|CUIT:|Situaci|$)", emisor_block)
 
     emisor.nombre = re.sub(r"\s+Fecha\b.*$", "", nombre.strip(), flags=re.IGNORECASE)
     emisor.cuit = _find_one(r"CUIT:\s*([0-9]{11})", emisor_block)
@@ -196,7 +197,7 @@ def parse_parties(text: str) -> Tuple[Party, Party]:
     rb = m.group(1) if m else receptor_block
 
     receptor.cuit = _find_one(r"CUIT:\s*([0-9]{11})", rb)
-    receptor.nombre = _find_one(r"(?:Nombre y Apellido|Raz[oó]n Social):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+)", rb, group=1)
+    receptor.nombre = _find_one(r"(?:Nombre y Apellido|Raz[oó]n Social):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+?)(?:\n|CUIT:|Situaci|$)", rb, group=1)
     receptor.cond_iva_raw = _find_one(r"(?:Situaci[oó]n IVA|Situación IVA):\s*([A-Za-zÁÉÍÓÚÑáéíóúñ\s]+)", rb, group=1)
     receptor.cond_iva = condicion_iva_abreviar(receptor.cond_iva_raw)
     receptor.iibb = _find_one(r"N[°º] IIBB:\s*([A-Z0-9\-\.\s]*)", rb)
@@ -231,6 +232,30 @@ def parse_header(text: str) -> Dict[str, str]:
     }
 
 
+
+def parse_retenciones(text: str) -> List[Tuple[str, float]]:
+    """Busca retenciones/tributos relevantes para exportar en Ventas (Otros conceptos).
+    Devuelve lista de (concepto, importe). Importes siempre positivos (signo se aplica en processor si corresponde).
+    """
+    out: List[Tuple[str, float]] = []
+    patterns = [
+        (r"Ret\.?\s*Gananc\w*\s*[:\-]?\s*\$?\s*([0-9\.,]+)", "Ret. Ganancias"),
+        (r"Ret\.?\s*Imp\.?\s*Nacion\w*\s*[:\-]?\s*\$?\s*([0-9\.,]+)", "Ret. Imp. Nacionales"),
+        (r"Imp\.?\s*Nacion\w*\s*Ret\.?\s*[:\-]?\s*\$?\s*([0-9\.,]+)", "Ret. Imp. Nacionales"),
+    ]
+    for rgx, label in patterns:
+        for m in re.finditer(rgx, text, flags=re.IGNORECASE):
+            amt = parse_money(m.group(1)) or 0.0
+            if amt:
+                out.append((label, float(amt)))
+    # dedup (sum by label)
+    if out:
+        agg: Dict[str, float] = {}
+        for k, v in out:
+            agg[k] = agg.get(k, 0.0) + float(v)
+        out = [(k, v) for k, v in agg.items()]
+    return out
+
 def parse_totales(text: str) -> Dict[str, float]:
     def money_after(label: str) -> float:
         m = re.search(label + r"\s*\$?\s*([0-9][0-9,]*\.[0-9]{2})", text, re.IGNORECASE)
@@ -251,6 +276,7 @@ def _text_only_category(line: str) -> str:
     t = re.sub(r"\b\d[\d,]*\b", " ", t)  # enteros
     t = re.sub(r"\bKg\.?\s*Vivo\b", " ", t, flags=re.IGNORECASE)
     t = re.sub(r"\bCabeza\b", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bUN(?:ID(?:AD(?:ES)?)?)?\b", " ", t, flags=re.IGNORECASE)
     t = re.sub(r"\s*\.\s*", " ", t)  # puntos sueltos por cortes de importes
     t = re.sub(r"\s{2,}", " ", t).strip(" -/")
     return t.strip()
@@ -366,6 +392,13 @@ def parse_items(text: str) -> List[ItemHacienda]:
                 cabezas = float(parse_int(m.group(1)) or 0)
             kilos = 0.0
 
+
+        else:
+            # fallback: usar cantidad asociada a la UM como "cabezas" cuando no hay kilos
+            if um:
+                m4 = re.search(rf"\b{re.escape(um)}\b\s+(\d[\d,]*)", ln, re.IGNORECASE)
+                if m4:
+                    cabezas = float(parse_int(m4.group(1)) or 0)
         categoria = _text_only_category(ln)
         if not categoria:
             continue
@@ -421,6 +454,7 @@ def parse_pdf(pdf_path: str) -> ParsedDoc:
     tot = parse_totales(text)
     items = parse_items(text)
     gastos = parse_gastos(text)
+    retenciones = parse_retenciones(text)
 
     return ParsedDoc(
         filename=pdf_path.split("/")[-1],
@@ -440,6 +474,7 @@ def parse_pdf(pdf_path: str) -> ParsedDoc:
         total_gastos=tot["total_gastos"],
         iva_gastos=tot["iva_gastos"],
         importe_neto=tot["importe_neto"],
+        retenciones=retenciones,
         items=items,
         gastos=gastos,
     )
