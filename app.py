@@ -68,7 +68,7 @@ with col_u2:
 if "files_meta" not in st.session_state:
     st.session_state.files_meta = {}
 if "parsed_docs" not in st.session_state:
-    st.session_state.parsed_
+    st.session_state.parsed_docs = {}
 docs = []
 roles = {}
 
