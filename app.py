@@ -222,11 +222,5 @@ if st.session_state.parsed_docs:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-
-
-st.markdown(
-)
-
-
 st.markdown('---')
 st.caption('Herramienta para uso interno | Developer Alfonso Alderete')
