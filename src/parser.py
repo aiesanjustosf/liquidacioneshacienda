@@ -139,39 +139,69 @@ def extract_full_text(pdf_path: str) -> str:
 
 
 def parse_parties(text: str) -> Tuple[Party, Party]:
+    """
+    Extrae EMISOR y RECEPTOR.
+    En PDFs LSP/ARCA, el EMISOR suele figurar inmediatamente después de la línea "Cód. XXX"
+    y antes de "Fecha ...", mientras que el RECEPTOR se encuentra en el bloque que inicia con "Receptor".
+    """
     emisor = Party()
     receptor = Party()
 
-    # Emisor: nombre suele estar entre ORIGINAL y "Cód."
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    idx_cod = next((i for i, ln in enumerate(lines) if "CÓD." in ln.upper() or "COD." in ln.upper()), None)
-    if idx_cod is not None:
-        cand = []
-        for j in range(max(0, idx_cod - 3), idx_cod):
-            up = lines[j].upper()
-            if any(k in up for k in ["ORIGINAL", "LIQUIDACIÓN", "LIQUIDACION", "CUENTA DE VENTA", "N°", "Nº"]):
-                continue
-            cand.append(lines[j])
-        if cand:
-            emisor.nombre = " ".join(cand).strip()
+    # --- Split por bloque Receptor ---
+    m_rec = re.search(r"\bReceptor\b", text, re.IGNORECASE)
+    emisor_block = text[: m_rec.start()] if m_rec else text
+    receptor_block = text[m_rec.start():] if m_rec else ""
 
-    emisor.cuit = _find_one(r"CUIT:\s*([0-9]{11})", text)
-    emisor.iibb = _find_one(r"Ingresos Brutos:\s*([A-Z0-9\-\.\s]*)", text)
-    emisor.cond_iva_raw = _find_one(r"Condicion frente al IVA:\s*([A-Za-zÁÉÍÓÚÑáéíóúñ\s]+)", text)
+    # --- Emisor ---
+    lines = [ln.strip() for ln in emisor_block.splitlines() if ln.strip()]
+    idx_cod = next((i for i, ln in enumerate(lines) if re.search(r"\bC[óo]d\.?\b", ln, re.IGNORECASE)), None)
+
+    nombre = ""
+    if idx_cod is not None:
+        # Caso frecuente: la razón social está ANTES de "Cód." en la misma línea
+        ln_cod = lines[idx_cod]
+        m_cod = re.search(r"\bC[óo]d\.?\s*\d+\b", ln_cod, re.IGNORECASE)
+        if m_cod:
+            pre = ln_cod[:m_cod.start()].strip()
+            up_pre = pre.upper()
+            if pre and "ORIGINAL" not in up_pre and "LIQUID" not in up_pre:
+                nombre = pre
+
+        # Continuación en la línea siguiente (ej: "ANONIMA")
+        for j in range(idx_cod + 1, min(idx_cod + 4, len(lines))):
+            cand = lines[j].strip()
+            up = cand.upper()
+            if up.startswith("FECHA"):
+                break
+            if "CUIT" in up or "INGRESOS BRUTOS" in up:
+                break
+            if any(k in up for k in ["RECEPTOR", "ORIGINAL", "LIQUIDACIÓN", "LIQUIDACION", "N°", "Nº", "COD.", "CÓD."]):
+                continue
+            if nombre:
+                nombre = f"{nombre} {cand}".strip()
+            else:
+                nombre = cand
+            break
+    if not nombre:
+        nombre = _find_one(r"(?:Raz[oó]n Social|Nombre y Apellido):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+)", emisor_block)
+
+    emisor.nombre = re.sub(r"\s+Fecha\b.*$", "", nombre.strip(), flags=re.IGNORECASE)
+    emisor.cuit = _find_one(r"CUIT:\s*([0-9]{11})", emisor_block)
+    emisor.iibb = _find_one(r"Ingresos Brutos:\s*([A-Z0-9\-\.\s]*)", emisor_block)
+    emisor.cond_iva_raw = _find_one(r"Condicion frente al IVA:\s*([A-Za-zÁÉÍÓÚÑáéíóúñ\s]+)", emisor_block)
     emisor.cond_iva = condicion_iva_abreviar(emisor.cond_iva_raw)
 
-    # Receptor block
-    m = re.search(r"Receptor(.*?)(Fecha Operaci[oó]n:|Fecha Operacion:)", text, re.IGNORECASE | re.DOTALL)
-    receptor_block = m.group(1) if m else ""
+    # --- Receptor ---
+    m = re.search(r"Receptor(.*?)(Fecha Operaci[oó]n:|Fecha Operacion:)", receptor_block, re.IGNORECASE | re.DOTALL)
+    rb = m.group(1) if m else receptor_block
 
-    receptor.cuit = _find_one(r"CUIT:\s*([0-9]{11})", receptor_block)
-    receptor.nombre = _find_one(r"(?:Nombre y Apellido|Raz[oó]n Social):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+)", receptor_block, group=1)
-    receptor.cond_iva_raw = _find_one(r"(?:Situaci[oó]n IVA|Situación IVA):\s*([A-Za-zÁÉÍÓÚÑáéíóúñ\s]+)", receptor_block, group=1)
+    receptor.cuit = _find_one(r"CUIT:\s*([0-9]{11})", rb)
+    receptor.nombre = _find_one(r"(?:Nombre y Apellido|Raz[oó]n Social):\s*([A-Z0-9\.\-\sÁÉÍÓÚÑáéíóúñ]+)", rb, group=1)
+    receptor.cond_iva_raw = _find_one(r"(?:Situaci[oó]n IVA|Situación IVA):\s*([A-Za-zÁÉÍÓÚÑáéíóúñ\s]+)", rb, group=1)
     receptor.cond_iva = condicion_iva_abreviar(receptor.cond_iva_raw)
-    receptor.iibb = _find_one(r"N[°º] IIBB:\s*([A-Z0-9\-\.\s]*)", receptor_block)
+    receptor.iibb = _find_one(r"N[°º] IIBB:\s*([A-Z0-9\-\.\s]*)", rb)
 
     return emisor, receptor
-
 
 def parse_header(text: str) -> Dict[str, str]:
     titulo = _find_one(r"ORIGINAL\s+[AB]\s+(.+?)\s+N[°º]", text)

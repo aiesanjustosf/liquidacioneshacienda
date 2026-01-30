@@ -8,6 +8,58 @@ from .parser import ParsedDoc, ItemHacienda, Gasto
 from .rules import Role, movimiento_por_regla
 
 
+# Columnas de salida (mismo formato que tus plantillas Holistor / ARCA)
+EMITIDOS_SALIDA_COLS = [
+    "Fecha Emisión",
+    "Fecha Recepción",
+    "Concepto",
+    "Tipo",
+    "Letra",
+    "Punto de Venta",
+    "Número Desde",
+    "Número Hasta",
+    "Tipo Doc. Emisor",
+    "Nro. Doc. Emisor",
+    "Denominación Emisor",
+    "Condición Fiscal",
+    "Tipo Cambio",
+    "Moneda",
+    "Alicuota",
+    "Neto",
+    "IVA",
+    "Ex/Ng",
+    "Otros Conceptos",
+    "Total",
+]
+
+RECIBIDOS_SALIDA_COLS = [
+    "Fecha dd/mm/aaaa",
+    "Cpbte",
+    "Tipo",
+    "Suc.",
+    "Número",
+    "Razón Social o Denominación Cliente",
+    "Tipo Doc.",
+    "CUIT",
+    "Domicilio",
+    "C.P.",
+    "Pcia",
+    "Cond Fisc",
+    "Moneda",
+    "Tipo de cambio",
+    "Cód. Neto",
+    "Neto Gravado",
+    "Alíc.",
+    "IVA Liquidado",
+    "IVA Débito",
+    "Cód. NG/EX",
+    "Conceptos NG/EX",
+    "Cód. P/R",
+    "Perc./Ret.",
+    "Pcia P/R",
+    "Total",
+]
+
 def _pct_from_totales(importe_bruto: float, iva_bruto: float) -> float:
     if importe_bruto and iva_bruto:
         return round((iva_bruto / importe_bruto) * 100, 2)
@@ -25,6 +77,8 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
     ctrl_v_detail: List[Dict[str, Any]] = []
     ctrl_c_detail: List[Dict[str, Any]] = []
     libro_ventas_rows: List[Dict[str, Any]] = []
+    ventas_salida_rows: List[Dict[str, Any]] = []
+    gastos_salida_rows: List[Dict[str, Any]] = []
 
     for d in docs:
         role = roles.get(d.filename, "RECEPTOR")
@@ -80,6 +134,49 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
         elif mov == "COMPRA":
             compras_rows.append(resumen)
 
+
+        # --- Ventas (formato "Emitidos Salida") ---
+        if mov == "VENTA":
+            # Alicuota por items o por totales
+            alic = 0.0
+            if d.items:
+                for it in d.items:
+                    if it.iva_pct is not None:
+                        alic = float(it.iva_pct)
+                        break
+            if not alic:
+                alic = float(_pct_from_totales(d.importe_bruto or 0.0, d.iva_bruto or 0.0))
+
+            neto_col = neto_hacienda
+            exng_col = 0.0
+            if (d.iva_bruto or 0.0) == 0.0:
+                # sin IVA => va como Ex/Ng
+                exng_col = neto_hacienda
+                neto_col = 0.0
+
+            ventas_salida_rows.append({
+                "Fecha Emisión": d.fecha,
+                "Fecha Recepción": d.fecha_operacion or d.fecha,
+                "Concepto": "Liquidación de Hacienda",
+                "Tipo": d.tipo_interno,
+                "Letra": d.letra,
+                "Punto de Venta": d.pv,
+                "Número Desde": d.numero,
+                "Número Hasta": d.numero,
+                "Tipo Doc. Emisor": "CUIT",
+                "Nro. Doc. Emisor": d.emisor.cuit,
+                "Denominación Emisor": d.emisor.nombre,
+                "Condición Fiscal": d.emisor.cond_iva,
+                "Tipo Cambio": 1,
+                "Moneda": "PES",
+                "Alicuota": alic if alic else "",
+                "Neto": neto_col,
+                "IVA": iva_hacienda,
+                "Ex/Ng": exng_col,
+                "Otros Conceptos": 0.0,
+                "Total": (neto_col or 0.0) + (iva_hacienda or 0.0) + (exng_col or 0.0),
+            })
+
         # Gastos detalle
         for g in d.gastos:
             gastos_rows.append({
@@ -95,6 +192,39 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "IVA %": g.iva_pct or "",
                 "IVA $": (g.iva_importe or 0.0) * s_m if g.iva_importe is not None else "",
             })
+
+            # Formato "Recibidos Salida" (ND A cód 400) para gastos/comisiones
+            base = (g.importe or 0.0) * s_m
+            iva_imp = (g.iva_importe or 0.0) * s_m if g.iva_importe is not None else 0.0
+            total = base + iva_imp
+            gastos_salida_rows.append({
+                "Fecha dd/mm/aaaa": d.fecha,
+                "Cpbte": "ND",
+                "Tipo": "A",
+                "Suc.": d.pv,
+                "Número": d.numero,
+                "Razón Social o Denominación Cliente": contraparte.nombre,
+                "Tipo Doc.": "CUIT",
+                "CUIT": contraparte.cuit,
+                "Domicilio": "",
+                "C.P.": "",
+                "Pcia": "",
+                "Cond Fisc": contraparte.cond_iva,
+                "Moneda": "PES",
+                "Tipo de cambio": 1,
+                "Cód. Neto": "",
+                "Neto Gravado": base,
+                "Alíc.": g.iva_pct or "",
+                "IVA Liquidado": iva_imp if (g.iva_importe is not None) else "",
+                "IVA Débito": 0.0,
+                "Cód. NG/EX": "",
+                "Conceptos NG/EX": "",
+                "Cód. P/R": "",
+                "Perc./Ret.": "",
+                "Pcia P/R": "",
+                "Total": total,
+            })
+
 
         # Control hacienda: sólo si hay items; monto neto sin gastos = suma de bruto de items
         if d.items:
@@ -181,6 +311,9 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
 
     df_libro_ventas = pd.DataFrame(libro_ventas_rows)
 
+    df_ventas_salida = pd.DataFrame(ventas_salida_rows, columns=EMITIDOS_SALIDA_COLS)
+    df_gastos_salida = pd.DataFrame(gastos_salida_rows, columns=RECIBIDOS_SALIDA_COLS)
+
     return {
         "ventas": df_ventas,
         "compras": df_compras,
@@ -190,4 +323,6 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
         "ctrl_compras_detalle": dc_det,
         "ctrl_compras_resumen": dc_res,
         "libro_ventas": df_libro_ventas,
+        "ventas_salida": df_ventas_salida,
+        "gastos_salida": df_gastos_salida,
     }
