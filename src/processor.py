@@ -78,7 +78,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
     ctrl_c_detail: List[Dict[str, Any]] = []
     libro_ventas_rows: List[Dict[str, Any]] = []
     ventas_salida_rows: List[Dict[str, Any]] = []
-    gastos_salida_rows: List[Dict[str, Any]] = []
+    compras_gastos_salida_rows: List[Dict[str, Any]] = []
 
     for d in docs:
         role = roles.get(d.filename, "RECEPTOR")
@@ -157,7 +157,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             ventas_salida_rows.append({
                 "Fecha Emisión": d.fecha,
                 "Fecha Recepción": d.fecha_operacion or d.fecha,
-                "Concepto": "Liquidación de Hacienda",
+                "Concepto": 141,
                 "Tipo": d.tipo_interno,
                 "Letra": d.letra,
                 "Punto de Venta": d.pv,
@@ -193,40 +193,107 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "IVA $": (g.iva_importe or 0.0) * s_m if g.iva_importe is not None else "",
             })
 
-            # Formato "Recibidos Salida" (ND A cód 400) para gastos/comisiones
-            base = (g.importe or 0.0) * s_m
-            iva_imp = (g.iva_importe or 0.0) * s_m if g.iva_importe is not None else 0.0
-            total = base + iva_imp
-            gastos_salida_rows.append({
-                "Fecha dd/mm/aaaa": d.fecha,
-                "Cpbte": "ND",
-                "Tipo": "A",
-                "Suc.": d.pv,
-                "Número": d.numero,
-                "Razón Social o Denominación Cliente": contraparte.nombre,
+            
+
+
+
+        
+        # --- Compras/Gastos (formato "Recibidos Salida") ---
+        def _append_recibidos_row(*, fecha: str, cpbte: str, letra: str, suc: str, numero: str,
+                                  contraparte_nombre: str, contraparte_cuit: str, cond_fisc: str,
+                                  cod_neto: str, base: float, iva_pct: float | str, iva_imp: float,
+                                  cod_ngex: str = "", concepto_ngex: float | str = "") -> None:
+            total = (base or 0.0) + (iva_imp or 0.0)
+            row = {
+                "Fecha dd/mm/aaaa": fecha,
+                "Cpbte": cpbte,
+                "Tipo": letra,
+                "Suc.": suc,
+                "Número": numero,
+                "Razón Social o Denominación Cliente": contraparte_nombre,
                 "Tipo Doc.": "CUIT",
-                "CUIT": contraparte.cuit,
+                "CUIT": contraparte_cuit,
                 "Domicilio": "",
                 "C.P.": "",
                 "Pcia": "",
-                "Cond Fisc": contraparte.cond_iva,
+                "Cond Fisc": cond_fisc,
                 "Moneda": "PES",
                 "Tipo de cambio": 1,
-                "Cód. Neto": "",
-                "Neto Gravado": base,
-                "Alíc.": g.iva_pct or "",
-                "IVA Liquidado": iva_imp if (g.iva_importe is not None) else "",
+                "Cód. Neto": cod_neto,
+                "Neto Gravado": base if (iva_imp or 0.0) != 0.0 else 0.0,
+                "Alíc.": iva_pct if (iva_imp or 0.0) != 0.0 else "",
+                "IVA Liquidado": iva_imp if (iva_imp or 0.0) != 0.0 else "",
                 "IVA Débito": 0.0,
-                "Cód. NG/EX": "",
-                "Conceptos NG/EX": "",
+                "Cód. NG/EX": cod_ngex if (iva_imp or 0.0) == 0.0 else "",
+                "Conceptos NG/EX": concepto_ngex if (iva_imp or 0.0) == 0.0 else "",
                 "Cód. P/R": "",
                 "Perc./Ret.": "",
                 "Pcia P/R": "",
                 "Total": total,
-            })
+            }
+            compras_gastos_salida_rows.append(row)
+
+        # Línea 525 (valor hacienda) SOLO para comprobantes clasificados como COMPRA
+        if mov == "COMPRA":
+            base = neto_hacienda
+            iva_imp = iva_hacienda
+            alic = _pct_from_totales(d.importe_bruto or 0.0, d.iva_bruto or 0.0)
+            if base != 0.0:
+                if (iva_imp or 0.0) == 0.0:
+                    _append_recibidos_row(
+                        fecha=d.fecha,
+                        cpbte=d.tipo_interno,
+                        letra=d.letra,
+                        suc=d.pv,
+                        numero=d.numero,
+                        contraparte_nombre=contraparte.nombre,
+                        contraparte_cuit=contraparte.cuit,
+                        cond_fisc=contraparte.cond_iva,
+                        cod_neto="525",
+                        base=base,
+                        iva_pct="",
+                        iva_imp=0.0,
+                        cod_ngex="EX",
+                        concepto_ngex=base,
+                    )
+                else:
+                    _append_recibidos_row(
+                        fecha=d.fecha,
+                        cpbte=d.tipo_interno,
+                        letra=d.letra,
+                        suc=d.pv,
+                        numero=d.numero,
+                        contraparte_nombre=contraparte.nombre,
+                        contraparte_cuit=contraparte.cuit,
+                        cond_fisc=contraparte.cond_iva,
+                        cod_neto="525",
+                        base=base,
+                        iva_pct=alic if alic else "",
+                        iva_imp=iva_imp,
+                    )
+
+        # Línea 400 (gastos) para compras y también incluir gastos de ventas
+        if (d.total_gastos or 0.0) != 0.0:
+            base_g = (d.total_gastos or 0.0) * s_m
+            iva_g = (d.iva_gastos or 0.0) * s_m
+            alic_g = round((iva_g / base_g) * 100, 2) if base_g else ""
+            _append_recibidos_row(
+                fecha=d.fecha,
+                cpbte="ND",
+                letra="A",
+                suc=d.pv,
+                numero=d.numero,
+                contraparte_nombre=contraparte.nombre,
+                contraparte_cuit=contraparte.cuit,
+                cond_fisc=contraparte.cond_iva,
+                cod_neto="400",
+                base=base_g,
+                iva_pct=alic_g if iva_g else "",
+                iva_imp=iva_g if iva_g else 0.0,
+            )
 
 
-        # Control hacienda: sólo si hay items; monto neto sin gastos = suma de bruto de items
+# Control hacienda: sólo si hay items; monto neto sin gastos = suma de bruto de items
         if d.items:
             for it in d.items:
                 row = {
@@ -312,7 +379,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
     df_libro_ventas = pd.DataFrame(libro_ventas_rows)
 
     df_ventas_salida = pd.DataFrame(ventas_salida_rows, columns=EMITIDOS_SALIDA_COLS)
-    df_gastos_salida = pd.DataFrame(gastos_salida_rows, columns=RECIBIDOS_SALIDA_COLS)
+    df_compras_gastos_salida = pd.DataFrame(compras_gastos_salida_rows, columns=RECIBIDOS_SALIDA_COLS)
 
     return {
         "ventas": df_ventas,
@@ -324,5 +391,5 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
         "ctrl_compras_resumen": dc_res,
         "libro_ventas": df_libro_ventas,
         "ventas_salida": df_ventas_salida,
-        "gastos_salida": df_gastos_salida,
+        "compras_gastos_salida": df_compras_gastos_salida,
     }

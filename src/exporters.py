@@ -114,3 +114,45 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
                 letter = get_column_letter(j)
                 ws.column_dimensions[letter].width = min(45, max(12, len(str(col)) + 2))
     return output.getvalue()
+
+
+
+from openpyxl import load_workbook
+
+def df_to_template_excel_bytes(template_path: str, df: pd.DataFrame, sheet_name: str = "Salida") -> bytes:
+    """Carga un template XLSX y vuelca el DataFrame respetando encabezados del template."""
+    output = BytesIO()
+    wb = load_workbook(template_path)
+    if sheet_name not in wb.sheetnames:
+        ws = wb.active
+    else:
+        ws = wb[sheet_name]
+
+    # Buscar fila de encabezados (asumimos primera fila)
+    header_row = 1
+    headers = [ws.cell(header_row, c).value for c in range(1, ws.max_column + 1)]
+    # Mapear columnas del DF a posiciones
+    col_to_idx = {h: i+1 for i, h in enumerate(headers) if h not in (None, "")}
+
+    # Limpiar filas existentes debajo del header (mantener estilos de la fila 2 si existe)
+    if ws.max_row > header_row:
+        ws.delete_rows(header_row + 1, ws.max_row - header_row)
+
+    # Escribir filas
+    if df is None:
+        df = pd.DataFrame()
+
+    for r, (_, row) in enumerate(df.iterrows(), start=header_row + 1):
+        for col, val in row.items():
+            if col not in col_to_idx:
+                continue
+            c = col_to_idx[col]
+            cell = ws.cell(r, c)
+            # valores NaN -> vacío
+            if pd.isna(val):
+                cell.value = None
+            else:
+                cell.value = val
+
+    wb.save(output)
+    return output.getvalue()
