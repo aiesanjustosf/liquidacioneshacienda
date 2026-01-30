@@ -69,6 +69,11 @@ if "files_meta" not in st.session_state:
     st.session_state.files_meta = {}
 if "parsed_docs" not in st.session_state:
     st.session_state.parsed_docs = {}
+
+# Temp dir para persistir archivos subidos entre reruns
+if "tmp_dir" not in st.session_state:
+    st.session_state.tmp_dir = tempfile.mkdtemp(prefix="aie_hacienda_")
+tmp_dir = Path(st.session_state.tmp_dir)
 docs = []
 roles = {}
 
