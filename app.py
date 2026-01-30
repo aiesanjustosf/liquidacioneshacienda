@@ -47,7 +47,9 @@ def style_df(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
 
     fmt = {}
     for c in df.columns:
-        if money_pat.search(str(c)):
+        if re.search(r"ALIC", str(c), re.I):
+            fmt[c] = lambda v, _d=3: _fmt_ar(v, _d)
+        elif money_pat.search(str(c)):
             fmt[c] = lambda v, _d=2: _fmt_ar(v, _d)
         elif kilos_pat.search(str(c)):
             fmt[c] = lambda v, _d=2: _fmt_ar(v, _d)
@@ -221,6 +223,5 @@ if st.session_state.parsed_docs:
             file_name="hacienda_salidas.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-
 st.markdown('---')
 st.caption('Herramienta para uso interno | Developer Alfonso Alderete')
