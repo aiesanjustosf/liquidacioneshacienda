@@ -110,10 +110,18 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
                         cell = ws.cell(i, j)
                         if isinstance(cell.value, (int, float)):
                             cell.number_format = fmt
-            # Ajuste ancho columnas
+            # Ajuste ancho columnas (según contenido)
             for j, col in enumerate(df.columns, start=1):
                 letter = get_column_letter(j)
-                ws.column_dimensions[letter].width = min(45, max(12, len(str(col)) + 2))
+                try:
+                    max_len = max([len(str(col))] + [len(str(v)) for v in df[col].astype(str).values])
+                except Exception:
+                    max_len = len(str(col))
+                width = min(80, max(12, max_len + 2))
+                # Prioridad: Tipo de Hacienda suele ser largo
+                if "HACIENDA" in str(col).upper():
+                    width = max(width, 55)
+                ws.column_dimensions[letter].width = width
     return output.getvalue()
 
 

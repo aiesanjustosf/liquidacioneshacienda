@@ -390,7 +390,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                     "Tipo de Hacienda": it.categoria,
                     "UM": it.um,
                     "Precio ($ UM)": (it.precio or 0.0),
-                    "Cantidad (Cabezas)": (it.cabezas or 0.0) * (s_h),
+                    "Cantidad (Cabezas)": int(round((it.cabezas or 0.0) * (s_h))),
                     "Kilos": (it.kilos or 0.0) * (s_h),
                     "Monto Bruto (sin gastos)": (it.bruto or 0.0) * (s_m),
                 }
