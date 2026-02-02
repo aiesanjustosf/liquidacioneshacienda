@@ -52,12 +52,12 @@ def parse_int(s: str) -> Optional[int]:
 
 def money_tokens(line: str) -> List[str]:
     """
-    Devuelve importes monetarios tipo 1,234.56 o 1234.56.
-    Excluye porcentajes como 10.50 (sin coma y < 4 dígitos).
+    Devuelve importes monetarios tipo 1,234.56 o 950.00.
+    Excluye alícuotas típicas (10.50, 21.00, 27.00, 0.00) cuando aparecen en la línea.
     """
-    toks = re.findall(r"\b\d[\d,]*\.\d{1,2}\b", line)
-    filtered = [m for m in toks if ("," in m or len(m.split(".")[0]) >= 4)]
-    return filtered
+    toks = re.findall(r"\b\d[\d,]*\.\d{2,3}\b", line)
+    excl = {"10.50", "21.00", "27.00", "0.00"}
+    return [t for t in toks if t not in excl]
 
 
 def _find_one(pattern: str, text: str, group: int = 1, flags=re.IGNORECASE) -> str:
@@ -329,6 +329,14 @@ def parse_items(text: str) -> List[ItemHacienda]:
                 i += 1
                 continue
 
+        # Si la línea siguiente parece continuar la categoría (texto) sin importes, la anexamos
+        if i + 1 < len(data_lines):
+            nxt = data_lines[i + 1].strip()
+            if nxt and re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", nxt) and len(money_tokens(nxt)) == 0:
+                if len(money_tokens(cur)) > 0 and not re.search(r"^(Datos\s+Adicionales|VENCIMIENTO)\b", nxt, re.IGNORECASE):
+                    cur = f"{cur} {nxt}".strip()
+                    i += 1
+
         merged.append(cur)
         i += 1
 
@@ -339,6 +347,8 @@ def parse_items(text: str) -> List[ItemHacienda]:
             um = "Kg Vivo"
         elif re.search(r"\bCabeza\b", ln, re.IGNORECASE):
             um = "Cabeza"
+        elif re.search(r"\bUN(?:ID(?:AD(?:ES)?)?)?\b|\bUNIDADES?\b|\bUNIDAD\b", ln, re.IGNORECASE):
+            um = "Unidad"
 
         # IVA pct
         iva_pct = None
@@ -351,22 +361,30 @@ def parse_items(text: str) -> List[ItemHacienda]:
         # precio, bruto, iva (si aplica)
         precio = bruto = 0.0
         iva_imp = None
+
+        vals = []
+        for mny in monies:
+            v = parse_money(mny)
+            if v is not None:
+                vals.append(float(v))
+
         if iva_pct is not None:
-            if len(monies) >= 3:
-                precio = parse_money(monies[-3]) or 0.0
-                bruto = parse_money(monies[-2]) or 0.0
-                iva_imp = parse_money(monies[-1]) or 0.0
-            elif len(monies) == 2:
-                # En algunos PDFs (venta directa) el precio por cabeza puede venir partido; quedan bruto + IVA
-                bruto = parse_money(monies[-2]) or 0.0
-                iva_imp = parse_money(monies[-1]) or 0.0
-                precio = 0.0
+            if len(vals) >= 2:
+                # Heurística robusta: en tablas con columnas desalineadas, tomamos:
+                # - bruto = mayor
+                # - iva  = segundo mayor
+                # - precio = menor (si existe)
+                vals_sorted = sorted(vals)
+                bruto = vals_sorted[-1]
+                iva_imp = vals_sorted[-2] if len(vals_sorted) >= 2 else None
+                precio = vals_sorted[0] if len(vals_sorted) >= 3 else 0.0
             else:
                 continue
         else:
-            if len(monies) >= 2:
-                precio = parse_money(monies[-2]) or 0.0
-                bruto = parse_money(monies[-1]) or 0.0
+            if len(vals) >= 1:
+                vals_sorted = sorted(vals)
+                bruto = vals_sorted[-1]
+                precio = vals_sorted[0] if len(vals_sorted) >= 2 else 0.0
             else:
                 continue
 
@@ -392,6 +410,11 @@ def parse_items(text: str) -> List[ItemHacienda]:
                 cabezas = float(parse_int(m.group(1)) or 0)
             kilos = 0.0
 
+        elif um.lower().startswith("unidad"):
+            m = re.search(r"\bUN(?:ID(?:AD(?:ES)?)?)?\b\s+(\d[\d,]*)", ln, re.IGNORECASE)
+            if m:
+                cabezas = float(parse_int(m.group(1)) or 0)
+            kilos = 0.0
 
         else:
             # fallback: usar cantidad asociada a la UM como "cabezas" cuando no hay kilos

@@ -97,11 +97,11 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
             for j, col in enumerate(df.columns, start=1):
                 kind = _col_kind(str(col))
                 if kind == "money":
-                    fmt = '#,##0.00'
+                    fmt = '#.##0,00'
                 elif kind == "kilos":
-                    fmt = '#,##0.00'
+                    fmt = '#.##0,00'
                 elif kind == "qty":
-                    fmt = '#,##0'
+                    fmt = '#.##0'
                 else:
                     fmt = None
                 if fmt:
@@ -144,17 +144,20 @@ def df_to_template_excel_bytes(template_path: str, df: pd.DataFrame, sheet_name:
     # helper: set number formats
     def _apply_fmt(cell, colname: str, val):
         up = (colname or "").upper()
+        if up == "CONCEPTO":
+            cell.number_format = "0"
+            return
         if val is None or val == "":
             return
         if isinstance(val, (int, float)):
             if "ALIC" in up:
-                cell.number_format = "0.000"
+                cell.number_format = "0,000"
             elif re.search(r"(CABEZA|CANTIDAD)", up):
-                cell.number_format = "#,##0"
+                cell.number_format = "#.##0"
             elif "KILO" in up:
-                cell.number_format = "#,##0.00"
+                cell.number_format = "#.##0,00"
             elif re.search(r"(NETO|IVA|GASTO|IMPORTE|MONTO|BRUTO|TOTAL|PRECIO|COMISI|OTROS|CONCEP)", up):
-                cell.number_format = "#,##0.00"
+                cell.number_format = "#.##0,00"
             elif re.search(r"(COD|CÓD)", up):
                 cell.number_format = "0"
             elif "TD" == up or "TIPO DOC" in up:

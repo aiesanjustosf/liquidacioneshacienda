@@ -18,8 +18,7 @@ EMITIDOS_SALIDA_COLS = [
     "Punto de Venta",
     "Número Desde",
     "Número Hasta",
-    "Tipo Doc. Emisor",
-    "Nro. Doc. Emisor",
+        "Nro. Doc. Emisor",
     "Denominación Emisor",
     "Condición Fiscal",
     "TD",
@@ -40,8 +39,7 @@ RECIBIDOS_SALIDA_COLS = [
     "Suc.",
     "Número",
     "Razón Social o Denominación Cliente",
-    "Tipo Doc.",
-    "CUIT",
+        "CUIT",
     "Domicilio",
     "C.P.",
     "Pcia",
@@ -64,7 +62,7 @@ RECIBIDOS_SALIDA_COLS = [
 
 def _pct_from_totales(importe_bruto: float, iva_bruto: float) -> float:
     if importe_bruto and iva_bruto:
-        return round((iva_bruto / importe_bruto) * 100, 2)
+        return round((iva_bruto / importe_bruto) * 100, 3)
     return 0.0
 
 
@@ -123,6 +121,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             "Contraparte CUIT": contraparte.cuit,
             "Contraparte": contraparte.nombre,
             "Cond IVA": contraparte.cond_iva,
+            "Categoría/Raza": ", ".join(sorted({(it.categoria or "").strip() for it in d.items if (it.categoria or "").strip()})) if d.items else "",
             "Cabezas": cabezas,
             "Kilos": kilos,
             "Neto Hacienda (sin gastos)": neto_hacienda,
@@ -165,8 +164,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Punto de Venta": d.pv,
                 "Número Desde": d.numero,
                 "Número Hasta": d.numero,
-                "Tipo Doc. Emisor": 80,
-                "Nro. Doc. Emisor": d.emisor.cuit,
+"Nro. Doc. Emisor": d.emisor.cuit,
                 "Denominación Emisor": d.emisor.nombre,
                 "Condición Fiscal": d.emisor.cond_iva,
                 "TD": 80,
@@ -197,8 +195,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         "Punto de Venta": d.pv,
                         "Número Desde": d.numero,
                         "Número Hasta": d.numero,
-                        "Tipo Doc. Emisor": 80,
-                        "Nro. Doc. Emisor": d.emisor.cuit,
+"Nro. Doc. Emisor": d.emisor.cuit,
                         "Denominación Emisor": d.emisor.nombre,
                         "Condición Fiscal": d.emisor.cond_iva,
                         "TD": 80,
@@ -254,7 +251,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             conc_ng = ""
 
             if force_exento:
-                cod_ng = str(cod_ngex) if str(cod_ngex) else str(cod_neto)
+                cod_ng = str(cod_ngex) if str(cod_ngex) else str(int(cod_neto))
                 conc_ng = base
             else:
                 if (iva_imp or 0.0) != 0.0 or force_neto_no_iva:
@@ -283,8 +280,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Suc.": suc,
                 "Número": numero,
                 "Razón Social o Denominación Cliente": contraparte_nombre,
-                "Tipo Doc.": td,
-                "CUIT": contraparte_cuit,
+"CUIT": contraparte_cuit,
                 "Domicilio": "",
                 "C.P.": "",
                 "Pcia": "",
@@ -292,7 +288,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "TD": td,
                 "Moneda": "PES",
                 "Tipo de cambio": 1,
-                "Cód. Neto": int(cod_neto) if str(cod_neto).strip() else "",
+                "Cód. Neto": int(cod_neto) if str(int(cod_neto)).strip() else "",
                 "Neto Gravado": neto_gravado,
                 "Alíc.": alic,
                 "IVA Liquidado": iva_liq,
@@ -322,7 +318,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         contraparte_nombre=contraparte.nombre,
                         contraparte_cuit=contraparte.cuit,
                         cond_fisc=contraparte.cond_iva,
-                        cod_neto="525",
+                        cod_neto=525,
                         base=base,
                         iva_pct="",
                         iva_imp=0.0,
@@ -338,7 +334,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         contraparte_nombre=contraparte.nombre,
                         contraparte_cuit=contraparte.cuit,
                         cond_fisc=contraparte.cond_iva,
-                        cod_neto="525",
+                        cod_neto=525,
                         base=base,
                         iva_pct=alic if alic else "",
                         iva_imp=iva_imp,
@@ -396,7 +392,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                     "Precio ($ UM)": (it.precio or 0.0),
                     "Cantidad (Cabezas)": (it.cabezas or 0.0) * (s_h),
                     "Kilos": (it.kilos or 0.0) * (s_h),
-                    "Monto Neto (sin gastos)": (it.bruto or 0.0) * (s_m),
+                    "Monto Bruto (sin gastos)": (it.bruto or 0.0) * (s_m),
                 }
                 if mov == "VENTA":
                     ctrl_v_detail.append(row)
@@ -461,7 +457,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             .agg({
                 "Cantidad (Cabezas)": "sum",
                 "Kilos": "sum",
-                "Monto Neto (sin gastos)": "sum",
+                "Monto Bruto (sin gastos)": "sum",
                 "Precio ($ UM)": lambda s: s.iloc[0] if len(set([v for v in s if pd.notna(v)])) <= 1 else "",
             })
         )
