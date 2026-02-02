@@ -389,10 +389,10 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 row = {
                     "Tipo de Hacienda": it.categoria,
                     "UM": it.um,
-                    "Precio ($ UM)": (it.precio or 0.0),
+                    "Precio ($ UM)": float(it.precio or 0.0),
                     "Cantidad (Cabezas)": int(round((it.cabezas or 0.0) * (s_h))),
-                    "Kilos": (it.kilos or 0.0) * (s_h),
-                    "Monto Bruto (sin gastos)": (it.bruto or 0.0) * (s_m),
+                    "Kilos": float(it.kilos or 0.0) * (s_h),
+                    "Monto Bruto (sin gastos)": float(it.bruto or 0.0) * (s_m),
                 }
                 if mov == "VENTA":
                     ctrl_v_detail.append(row)

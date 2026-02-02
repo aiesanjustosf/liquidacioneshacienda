@@ -45,7 +45,9 @@ def _col_kind(colname: str) -> str:
 
 def df_to_pdf_bytes(df: pd.DataFrame, title: str = "Grilla") -> bytes:
     """
-    Exporta un DataFrame a PDF (tabla) ajustando anchos para que no se "corten" columnas.
+    Exporta un DataFrame a PDF (tabla) con layout estable (A4 horizontal).
+    - Evita encabezados "rotos" (no usa Paragraph en header).
+    - Para Grillas de Compras/Ventas usa un set compacto de columnas para que entren prolijas.
     """
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -63,6 +65,155 @@ def df_to_pdf_bytes(df: pd.DataFrame, title: str = "Grilla") -> bytes:
         story.append(Paragraph("Sin datos.", styles["Normal"]))
         doc.build(story)
         return buffer.getvalue()
+
+    # --- Selección de columnas para PDF (para que NO quede horrible) ---
+    cols = list(df.columns)
+
+    def _pick(names: list[str]) -> list[str]:
+        picked = []
+        for n in names:
+            if n in cols:
+                picked.append(n)
+        return picked
+
+    title_norm = _norm(title)
+    is_grid = ("GRILLA" in title_norm)
+
+    if is_grid:
+        # Orden compacto (mantener similar a tu compras.pdf "bueno" + Categoria/Raza)
+        desired = [
+            "Fecha",
+            "Fecha Operación",
+            "Título",
+            "Tipo",
+            "Cód ARCA",
+            "Letra",
+            "PV",
+            "Número",
+            "Ajuste",
+            "Ajuste sentido",
+            "Ajuste tipo",
+            "Contraparte CUIT",
+            "Contraparte",
+            "Cond IVA",
+            "Categoría/Raza",
+            "Cabezas",
+            "Kilos",
+            "Neto Hacienda (sin gastos)",
+            "IVA Hacienda",
+            "Gastos (sin IVA)",
+            "IVA Gastos",
+        ]
+        sel = _pick(desired)
+        # Si faltan algunas (según reporte), igual seguimos con lo que haya
+        if sel:
+            df_pdf = df[sel].copy()
+        else:
+            df_pdf = df.copy()
+    else:
+        df_pdf = df.copy()
+
+    # --- Preparar datos ---
+    # Header como string (para que NO rompa palabras en vertical)
+    header = [str(c) for c in df_pdf.columns]
+
+    # Columnas texto que conviene wrappear
+    text_cols = set()
+    for idx, c in enumerate(df_pdf.columns):
+        c_norm = _norm(str(c))
+        if any(k in c_norm for k in ("CATEG", "RAZA", "CONTRAPARTE", "RAZON", "TITULO")):
+            text_cols.add(idx)
+
+    kinds = [_col_kind(c) for c in df_pdf.columns]
+
+    # Estilo compacto para celdas wrap
+    body_style = styles["BodyText"].clone("body_small")
+    body_style.fontSize = 6.5
+    body_style.leading = 7.5
+
+    data = [header]
+    for _, row in df_pdf.iterrows():
+        out_row = []
+        for col_idx, (v, k) in enumerate(zip(row.values, kinds)):
+            if pd.isna(v):
+                out_row.append("")
+                continue
+
+            if isinstance(v, numbers.Number) and k in ("money", "kilos"):
+                out_row.append(format_ar_number(v, decimals=2))
+            elif isinstance(v, numbers.Number) and k == "qty":
+                out_row.append(format_ar_number(v, decimals=0))
+            else:
+                s = str(v)
+                if col_idx in text_cols and len(s) > 28:
+                    out_row.append(Paragraph(s, body_style))
+                else:
+                    out_row.append(s)
+        data.append(out_row)
+
+    # --- Anchos de columnas (layout estable) ---
+    page_w, _ = landscape(A4)
+    avail_w = page_w - doc.leftMargin - doc.rightMargin
+
+    base_widths = []
+    for c, k in zip(df_pdf.columns, kinds):
+        cn = _norm(str(c))
+        if "CATEG" in cn or "RAZA" in cn:
+            w = 260
+        elif "CONTRAPARTE" in cn and "CUIT" not in cn:
+            w = 150
+        elif "CONTRAPARTE" in cn and "CUIT" in cn:
+            w = 85
+        elif "TITULO" in cn:
+            w = 120
+        elif "FECHA" in cn:
+            w = 70
+        elif "NUMERO" in cn:
+            w = 70
+        elif "PV" in cn:
+            w = 45
+        elif k == "qty":
+            w = 45
+        elif k in ("money", "kilos"):
+            w = 78
+        elif "COD" in cn:
+            w = 55
+        elif "LETRA" in cn:
+            w = 35
+        elif "UM" in cn:
+            w = 45
+        else:
+            w = 60
+        base_widths.append(w)
+
+    total_w = sum(base_widths)
+    if total_w > avail_w:
+        scale = avail_w / total_w
+        col_widths = [max(32, w * scale) for w in base_widths]
+    else:
+        col_widths = base_widths
+
+    table = Table(data, repeatRows=1, colWidths=col_widths)
+
+    style = TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 7),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTSIZE", (0, 1), (-1, -1), 6.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+    ])
+
+    # Alinear números a derecha
+    for j, k in enumerate(kinds):
+        if k in ("money", "kilos", "qty"):
+            style.add("ALIGN", (j, 1), (j, -1), "RIGHT")
+
+    table.setStyle(style)
+    story.append(table)
+    doc.build(story)
+    return buffer.getvalue()
 
     # Preparar datos (strings) y wrapping en columnas texto largas
     kinds = [_col_kind(c) for c in df.columns]
@@ -161,11 +312,11 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
             for j, col in enumerate(df.columns, start=1):
                 kind = _col_kind(str(col))
                 if kind == "money":
-                    fmt = '#,##0.00'
+                    fmt = '#.##0,00'
                 elif kind == "kilos":
-                    fmt = '#,##0.00'
+                    fmt = '#.##0,00'
                 elif kind == "qty":
-                    fmt = '#,##0'
+                    fmt = '#.##0'
                 else:
                     fmt = None
                 if fmt:
