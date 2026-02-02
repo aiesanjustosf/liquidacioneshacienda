@@ -312,11 +312,11 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
             for j, col in enumerate(df.columns, start=1):
                 kind = _col_kind(str(col))
                 if kind == "money":
-                    fmt = '#.##0,00'
+                    fmt = '#,##0.00'
                 elif kind == "kilos":
-                    fmt = '#.##0,00'
+                    fmt = '#,##0.00'
                 elif kind == "qty":
-                    fmt = '#.##0'
+                    fmt = '#,##0'
                 else:
                     fmt = None
                 if fmt:

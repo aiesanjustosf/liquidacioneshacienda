@@ -38,6 +38,7 @@ RECIBIDOS_SALIDA_COLS = [
     "Tipo",
     "Suc.",
     "Número",
+    "Movimiento",
     "Razón Social o Denominación Cliente",
         "CUIT",
     "Domicilio",
@@ -232,6 +233,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
         
         # --- Compras/Gastos (formato "Recibidos Salida") ---
         def _append_recibidos_row(*, fecha: str, cpbte: str, letra: str, suc: str, numero: str,
+                                  movimiento: str = "",
                                   contraparte_nombre: str, contraparte_cuit: str, cond_fisc: str,
                                   cod_neto: int | str, base: float,
                                   iva_pct: float | str = "", iva_imp: float = 0.0,
@@ -279,6 +281,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Tipo": letra,
                 "Suc.": suc,
                 "Número": numero,
+                "Movimiento": movimiento,
                 "Razón Social o Denominación Cliente": contraparte_nombre,
 "CUIT": contraparte_cuit,
                 "Domicilio": "",
@@ -318,11 +321,12 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         contraparte_nombre=contraparte.nombre,
                         contraparte_cuit=contraparte.cuit,
                         cond_fisc=contraparte.cond_iva,
-                        cod_neto=525,
+                                                cod_neto=525,
                         base=base,
                         iva_pct="",
                         iva_imp=0.0,
                         force_neto_no_iva=True,
+                        movimiento="COMPRA HACIENDA",
                     )
                 else:
                     _append_recibidos_row(
@@ -334,7 +338,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                         contraparte_nombre=contraparte.nombre,
                         contraparte_cuit=contraparte.cuit,
                         cond_fisc=contraparte.cond_iva,
-                        cod_neto=525,
+                                                cod_neto=525,
                         base=base,
                         iva_pct=alic if alic else "",
                         iva_imp=iva_imp,
@@ -342,6 +346,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
 
         # Línea 400 (gastos) para compras y también incluir gastos de ventas (ND/NC según signo)
         if (d.total_gastos or 0.0) != 0.0:
+            mov_label = "GASTO VENTA" if mov == "VENTA" else ("GASTO COMPRA" if mov == "COMPRA" else "GASTO")
             base_g = (d.total_gastos or 0.0) * s_m
             iva_g = (d.iva_gastos or 0.0) * s_m
 
@@ -360,6 +365,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                     contraparte_nombre=contraparte.nombre,
                     contraparte_cuit=contraparte.cuit,
                     cond_fisc=contraparte.cond_iva,
+                    movimiento=mov_label,
                     cod_neto=400,
                     base=base_g,
                     force_exento=True,
@@ -376,6 +382,7 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                     contraparte_nombre=contraparte.nombre,
                     contraparte_cuit=contraparte.cuit,
                     cond_fisc=contraparte.cond_iva,
+                    movimiento=mov_label,
                     cod_neto=400,
                     base=base_g,
                     iva_pct=alic_g,
@@ -461,6 +468,21 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Precio ($ UM)": lambda s: s.iloc[0] if len(set([v for v in s if pd.notna(v)])) <= 1 else "",
             })
         )
+        # Cantidades siempre enteras
+        for _df in (df_detail, resumen):
+            if _df is None or _df.empty:
+                continue
+            if 'Cantidad (Cabezas)' in _df.columns:
+                try:
+                    _df['Cantidad (Cabezas)'] = _df['Cantidad (Cabezas)'].round(0).astype('int64')
+                except Exception:
+                    pass
+            for _c in ('Kilos','Monto Bruto (sin gastos)','Precio ($ UM)'):
+                if _c in _df.columns:
+                    try:
+                        _df[_c] = pd.to_numeric(_df[_c], errors='coerce').round(2)
+                    except Exception:
+                        pass
         # Cantidades siempre enteras
         if 'Cantidad (Cabezas)' in resumen.columns:
             try:
