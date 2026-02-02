@@ -13,6 +13,16 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
+def _norm(s: str) -> str:
+    """Uppercase, remove accents, normalize spaces."""
+    s = str(s or "")
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.upper()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def format_ar_number(value: float, decimals: int = 2) -> str:
     """Formatea número con miles '.' y decimales ',' (Argentina)."""
     try:
