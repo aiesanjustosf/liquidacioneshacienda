@@ -138,7 +138,7 @@ if st.session_state.parsed_docs:
         # Libro ventas (Excel)
         st.subheader("Ventas - Excel")
         dflv = outputs["ventas_salida"]
-        st.dataframe(dflv, use_container_width=True, hide_index=True)
+        st.dataframe(style_df(dflv), use_container_width=True, hide_index=True)
         st.download_button(
             "Descargar Ventas.xlsx",
             data=df_to_template_excel_bytes(str(HERE / 'templates' / 'emitidos_salida.xlsx'), dflv),
