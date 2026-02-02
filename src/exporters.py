@@ -4,6 +4,7 @@ from io import BytesIO
 from typing import Dict, Optional
 import pandas as pd
 import re
+import unicodedata
 from openpyxl.utils import get_column_letter
 
 from reportlab.lib import colors
@@ -142,26 +143,58 @@ def df_to_template_excel_bytes(template_path: str, df: pd.DataFrame, sheet_name:
         df = pd.DataFrame()
 
     # helper: set number formats
+    def _norm_header(name: str) -> str:
+        s = (name or "")
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(ch for ch in s if not unicodedata.combining(ch))
+        return s.upper().strip()
+
     def _apply_fmt(cell, colname: str, val):
-        up = (colname or "").upper()
-        if up == "CONCEPTO":
-            cell.number_format = "0"
-            return
+        # Normalizar header para evitar problemas con acentos: "Alíc." -> "ALIC."
+        up = _norm_header(colname)
+
         if val is None or val == "":
             return
+
+        # Prioridad: TD / Tipo Doc
+        if up == "TD" or "TIPO DOC" in up:
+            cell.number_format = "0"
+            return
+
+        # Prioridad: códigos (ej. "Cód. Neto", "Cód. NG/EX") -> entero sin decimales
+        if "COD" in up or "CÓD" in up:
+            cell.number_format = "0"
+            # Forzar entero si viene como float (pandas)
+            if isinstance(val, float) and val.is_integer():
+                cell.value = int(val)
+            return
+
+        # Concepto (ventas) -> entero (141)
+        if up == "CONCEPTO":
+            cell.number_format = "0"
+            if isinstance(val, float) and val.is_integer():
+                cell.value = int(val)
+            return
+
         if isinstance(val, (int, float)):
+            # Alícuota con 3 decimales (10,500 / 21,000 / 0,000)
             if "ALIC" in up:
-                cell.number_format = "0,000"
-            elif re.search(r"(CABEZA|CANTIDAD)", up):
-                cell.number_format = "#.##0"
-            elif "KILO" in up:
-                cell.number_format = "#.##0,00"
-            elif re.search(r"(NETO|IVA|GASTO|IMPORTE|MONTO|BRUTO|TOTAL|PRECIO|COMISI|OTROS|CONCEP)", up):
-                cell.number_format = "#.##0,00"
-            elif re.search(r"(COD|CÓD)", up):
-                cell.number_format = "0"
-            elif "TD" == up or "TIPO DOC" in up:
-                cell.number_format = "0"
+                cell.number_format = "0.000"
+                return
+
+            # Cantidades (cabezas / unidades) sin decimales
+            if re.search(r"(CABEZA|CANTIDAD)", up):
+                cell.number_format = "#,##0"
+                return
+
+            # Kilos / precios / importes: 2 decimales
+            if "KILO" in up:
+                cell.number_format = "#,##0.00"
+                return
+
+            if re.search(r"(NETO|IVA|GASTO|IMPORTE|MONTO|BRUTO|TOTAL|PRECIO|COMISI|OTROS|CONCEP)", up):
+                cell.number_format = "#,##0.00"
+                return
 
     # Escribir filas
     for r, (_, row) in enumerate(df.iterrows(), start=header_row + 1):
