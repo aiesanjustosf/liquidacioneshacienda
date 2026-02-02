@@ -72,6 +72,12 @@ if "files_meta" not in st.session_state:
 if "parsed_docs" not in st.session_state:
     st.session_state.parsed_docs = {}
 
+# Control de duplicados (por rol): evita procesar el mismo PDF (aunque cambie el nombre)
+if "seen_hashes" not in st.session_state:
+    st.session_state.seen_hashes = {"EMISOR": set(), "RECEPTOR": set()}
+if "seen_doc_ids" not in st.session_state:
+    st.session_state.seen_doc_ids = {"EMISOR": set(), "RECEPTOR": set()}
+
 # Temp dir para persistir archivos subidos entre reruns
 if "tmp_dir" not in st.session_state:
     st.session_state.tmp_dir = tempfile.mkdtemp(prefix="aie_hacienda_")
@@ -79,7 +85,60 @@ tmp_dir = Path(st.session_state.tmp_dir)
 docs = []
 roles = {}
 
+
+def _file_sha256(b: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(b).hexdigest()
+
+def _doc_fingerprint(doc) -> str:
+    # Fingerprint estable: incluye ambos CUIT para evitar colisiones por mismo número
+    def _r2(x):
+        try:
+            return f"{float(x):.2f}"
+        except Exception:
+            return "0.00"
+    parts = [
+        str(getattr(doc, "cod_arca", "")),
+        str(getattr(doc, "letra", "")),
+        str(getattr(doc, "pv", "")),
+        str(getattr(doc, "numero", "")),
+        str(getattr(doc, "fecha", "")),
+        str(getattr(getattr(doc, "emisor", None), "cuit", "")),
+        str(getattr(getattr(doc, "receptor", None), "cuit", "")),
+        _r2(getattr(doc, "importe_bruto", 0.0)),
+        _r2(getattr(doc, "iva_bruto", 0.0)),
+        _r2(getattr(doc, "total_gastos", 0.0)),
+        _r2(getattr(doc, "iva_gastos", 0.0)),
+    ]
+    import hashlib
+    return hashlib.sha256("|".join(parts).encode("utf-8", errors="ignore")).hexdigest()
+
 def _parse_uploaded(files, role_label: str):
+    if not files:
+        return
+    for uf in files:
+        raw = uf.getvalue()
+        h = _file_sha256(raw)
+        if h in st.session_state.seen_hashes[role_label]:
+            st.warning(f"Duplicado ignorado ({role_label}): {uf.name}")
+            continue
+        st.session_state.seen_hashes[role_label].add(h)
+
+        tmp_path = tmp_dir / uf.name
+        tmp_path.write_bytes(raw)
+        try:
+            doc = parse_pdf(str(tmp_path))
+            doc_id = _doc_fingerprint(doc)
+            if doc_id in st.session_state.seen_doc_ids[role_label]:
+                st.warning(f"Comprobante ya procesado ({role_label}): {uf.name}")
+                continue
+            st.session_state.seen_doc_ids[role_label].add(doc_id)
+
+            docs.append(doc)
+            roles[doc.filename] = role_label
+        except Exception as e:
+            st.error(f"No pude leer {uf.name}: {e}")
+_parse_uploaded(files, role_label: str):
     if not files:
         return
     for uf in files:
