@@ -59,6 +59,19 @@ def style_df(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
 
 
 
+# --- Controles ---
+col_ctrl1, col_ctrl2 = st.columns([1, 3])
+with col_ctrl1:
+    if st.button("Limpiar carga", help="Borra PDFs procesados, deduplicados y reinicia la sesión de carga"):
+        # limpiar estado de carga completo (EMISOR + RECEPTOR)
+        for k in ["parsed_by_hash", "seen_doc_ids", "files_meta", "parsed_docs", "tmp_dir", "up_emisor", "up_receptor"]:
+            if k in st.session_state:
+                try:
+                    del st.session_state[k]
+                except Exception:
+                    pass
+        st.rerun()
+
 st.markdown("### 1) Subir comprobantes (PDF)")
 col_u1, col_u2 = st.columns(2)
 with col_u1:
@@ -72,9 +85,11 @@ if "files_meta" not in st.session_state:
 if "parsed_docs" not in st.session_state:
     st.session_state.parsed_docs = {}
 
-# Control de duplicados (por rol): evita procesar el mismo PDF (aunque cambie el nombre)
-if "seen_hashes" not in st.session_state:
-    st.session_state.seen_hashes = {"EMISOR": set(), "RECEPTOR": set()}
+# Control de duplicados (por rol)
+# - parsed_by_hash: hash del PDF -> doc parseado (reutiliza entre reruns)
+# - seen_doc_ids: fingerprint del comprobante para evitar duplicados aunque cambie el PDF
+if "parsed_by_hash" not in st.session_state:
+    st.session_state.parsed_by_hash = {"EMISOR": {}, "RECEPTOR": {}}
 if "seen_doc_ids" not in st.session_state:
     st.session_state.seen_doc_ids = {"EMISOR": set(), "RECEPTOR": set()}
 
@@ -114,30 +129,63 @@ def _doc_fingerprint(doc) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8", errors="ignore")).hexdigest()
 
 def _parse_uploaded(files, role_label: str):
+    """Parsea PDFs subidos para un rol (EMISOR/RECEPTOR) con dedupe.
+
+    - Reutiliza docs ya parseados por hash (evita warnings en reruns).
+    - Advierte solo duplicados dentro del mismo upload (mismo PDF 2 veces).
+    - Evita duplicar comprobantes por fingerprint (mismo comprobante en otro PDF).
+    """
     if not files:
         return
+
+    local_hashes = set()  # dedupe SOLO dentro de esta tanda de subida (UX)
     for uf in files:
         raw = uf.getvalue()
         h = _file_sha256(raw)
-        if h in st.session_state.seen_hashes[role_label]:
+
+        if h in local_hashes:
             st.warning(f"Duplicado ignorado ({role_label}): {uf.name}")
             continue
-        st.session_state.seen_hashes[role_label].add(h)
+        local_hashes.add(h)
 
+        # Si ya está parseado en sesión, lo reutilizamos (no warning, no re-parse)
+        if h in st.session_state.parsed_by_hash[role_label]:
+            doc = st.session_state.parsed_by_hash[role_label][h]
+            # Ajusto filename para que coincida con lo que el usuario ve
+            try:
+                doc.filename = uf.name
+            except Exception:
+                pass
+            docs.append(doc)
+            roles[uf.name] = role_label
+            continue
+
+        # Guardar en tmp y parsear
         tmp_path = tmp_dir / uf.name
         tmp_path.write_bytes(raw)
         try:
             doc = parse_pdf(str(tmp_path))
+            try:
+                doc.filename = uf.name
+            except Exception:
+                pass
+
             doc_id = _doc_fingerprint(doc)
             if doc_id in st.session_state.seen_doc_ids[role_label]:
+                # Ya existe un comprobante igual (aunque el PDF sea distinto)
                 st.warning(f"Comprobante ya procesado ({role_label}): {uf.name}")
+                # Igual cacheamos por hash para no re-parsear en reruns
+                st.session_state.parsed_by_hash[role_label][h] = doc
                 continue
+
             st.session_state.seen_doc_ids[role_label].add(doc_id)
+            st.session_state.parsed_by_hash[role_label][h] = doc
 
             docs.append(doc)
-            roles[doc.filename] = role_label
+            roles[uf.name] = role_label
         except Exception as e:
             st.error(f"No pude leer {uf.name}: {e}")
+
 _parse_uploaded(uploaded_emisor, "EMISOR")
 _parse_uploaded(uploaded_receptor, "RECEPTOR")
 
