@@ -138,19 +138,6 @@ def _parse_uploaded(files, role_label: str):
             roles[doc.filename] = role_label
         except Exception as e:
             st.error(f"No pude leer {uf.name}: {e}")
-_parse_uploaded(files, role_label: str):
-    if not files:
-        return
-    for uf in files:
-        tmp_path = tmp_dir / uf.name
-        tmp_path.write_bytes(uf.getbuffer())
-        try:
-            doc = parse_pdf(str(tmp_path))
-            docs.append(doc)
-            roles[doc.filename] = role_label
-        except Exception as e:
-            st.error(f"No pude leer {uf.name}: {e}")
-
 _parse_uploaded(uploaded_emisor, "EMISOR")
 _parse_uploaded(uploaded_receptor, "RECEPTOR")
 
