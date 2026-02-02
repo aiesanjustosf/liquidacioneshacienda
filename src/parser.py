@@ -272,6 +272,8 @@ def parse_totales(text: str) -> Dict[str, float]:
 
 def _text_only_category(line: str) -> str:
     # Quita importes monetarios y números sueltos, dejando texto/categoría
+    # Elimina prefijos tipo '305041318889 - NOMBRE ...' (cliente) que aparecen en algunas cuentas de venta.
+    line = re.sub(r'^\s*\d{11}\s*-\s*', '', line)
     t = re.sub(r"\b\d[\d,]*\.\d{2}\b", " ", line)  # importes
     t = re.sub(r"\b\d[\d,]*\b", " ", t)  # enteros
     t = re.sub(r"\bKg\.?\s*Vivo\b", " ", t, flags=re.IGNORECASE)
@@ -290,7 +292,12 @@ def parse_items(text: str) -> List[ItemHacienda]:
     if not start or not end or end.start() <= start.end():
         return items
 
-    block = text[start.start(): end.start()]
+    # El bloque de items termina antes de 'Gastos' (para evitar que entren comisión/base imponible como hacienda)
+    between = text[start.start(): end.start()]
+    g = re.search(r"\bGastos\b", between, re.IGNORECASE)
+    if g:
+        between = between[: g.start()]
+    block = between
     lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
 
     header_idx = next((i for i, ln in enumerate(lines) if re.search(r"Categor[ií]a\s*/\s*Raza", ln, re.IGNORECASE)), None)
@@ -424,6 +431,10 @@ def parse_items(text: str) -> List[ItemHacienda]:
                     cabezas = float(parse_int(m4.group(1)) or 0)
         categoria = _text_only_category(ln)
         if not categoria:
+            continue
+
+        # Filtro anti-gastos: nunca incluir comisión/base imponible/IVA en items de hacienda
+        if re.search(r"\b(Comisi[oó]n|Gastos?|Base\s+Imponible|Alicuota|Al[ií]cuota|IVA\b|Importe\s+IVA)\b", categoria, re.IGNORECASE):
             continue
 
         items.append(
