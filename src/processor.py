@@ -461,6 +461,12 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
                 "Precio ($ UM)": lambda s: s.iloc[0] if len(set([v for v in s if pd.notna(v)])) <= 1 else "",
             })
         )
+        # Cantidades siempre enteras
+        if 'Cantidad (Cabezas)' in resumen.columns:
+            try:
+                resumen['Cantidad (Cabezas)'] = resumen['Cantidad (Cabezas)'].round(0).astype('int64')
+            except Exception:
+                pass
         return df_detail, resumen
 
     df_ctrl_v_detail = pd.DataFrame(ctrl_v_detail)

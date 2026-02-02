@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from typing import Dict, Optional
 import pandas as pd
+import numbers
 import re
 import unicodedata
 from openpyxl.utils import get_column_letter
@@ -34,10 +35,17 @@ def _col_kind(colname: str) -> str:
 
 def df_to_pdf_bytes(df: pd.DataFrame, title: str = "Grilla") -> bytes:
     """
-    Exporta un DataFrame a PDF simple (tabla). Pensado para descargas rápidas desde Streamlit.
+    Exporta un DataFrame a PDF (tabla) ajustando anchos para que no se "corten" columnas.
     """
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=18, rightMargin=18, topMargin=18, bottomMargin=18)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        leftMargin=18,
+        rightMargin=18,
+        topMargin=18,
+        bottomMargin=18,
+    )
     styles = getSampleStyleSheet()
     story = [Paragraph(title, styles["Title"]), Spacer(1, 10)]
 
@@ -46,36 +54,81 @@ def df_to_pdf_bytes(df: pd.DataFrame, title: str = "Grilla") -> bytes:
         doc.build(story)
         return buffer.getvalue()
 
-    
-    # Convertimos a strings para evitar errores de render (y formatear montos estilo AR)
+    # Preparar datos (strings) y wrapping en columnas texto largas
     kinds = [_col_kind(c) for c in df.columns]
-    data = [list(df.columns)]
+    header = [Paragraph(str(c), styles["BodyText"]) for c in df.columns]
+    data = [header]
+
+    text_cols = set()
+    for idx, c in enumerate(df.columns):
+        c_norm = _norm(str(c))
+        if any(k in c_norm for k in ("CATEG", "RAZA", "CONTRAPARTE", "RAZON", "TITULO")):
+            text_cols.add(idx)
+
     for _, row in df.iterrows():
         out_row = []
-        for v, k in zip(row.values, kinds):
+        for col_idx, (v, k) in enumerate(zip(row.values, kinds)):
             if pd.isna(v):
                 out_row.append("")
                 continue
-            if isinstance(v, (int, float)) and k in ("money", "kilos"):
+            if isinstance(v, numbers.Number) and k in ("money", "kilos"):
                 out_row.append(format_ar_number(v, decimals=2))
-            elif isinstance(v, (int, float)) and k == "qty":
+            elif isinstance(v, numbers.Number) and k == "qty":
                 out_row.append(format_ar_number(v, decimals=0))
             else:
-                out_row.append(str(v))
+                s = str(v)
+                # Wrap en columnas texto
+                if col_idx in text_cols and len(s) > 40:
+                    out_row.append(Paragraph(s, styles["BodyText"]))
+                else:
+                    out_row.append(s)
         data.append(out_row)
 
-    table = Table(data, repeatRows=1)
+    # Anchos: asignar por tipo de columna y escalar a página
+    page_w, _ = landscape(A4)
+    avail_w = page_w - doc.leftMargin - doc.rightMargin
+
+    base_widths = []
+    for c, k in zip(df.columns, kinds):
+        cn = _norm(str(c))
+        if "CATEG" in cn or "RAZA" in cn:
+            w = 260
+        elif "CONTRAPARTE" in cn or "RAZON" in cn:
+            w = 190
+        elif k == "qty":
+            w = 55
+        elif k in ("money", "kilos"):
+            w = 80
+        elif "FECHA" in cn:
+            w = 70
+        elif "NUMERO" in cn:
+            w = 80
+        elif "PV" in cn or "PUNTO" in cn:
+            w = 55
+        elif "UM" in cn:
+            w = 55
+        else:
+            w = 65
+        base_widths.append(w)
+
+    total_w = sum(base_widths)
+    if total_w > avail_w:
+        scale = avail_w / total_w
+        col_widths = [max(35, w * scale) for w in base_widths]
+    else:
+        col_widths = base_widths
+
+    table = Table(data, repeatRows=1, colWidths=col_widths)
     style = TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("FONTSIZE", (0, 0), (-1, 0), 8),
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("FONTSIZE", (0, 1), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTSIZE", (0, 1), (-1, -1), 7),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
     ])
     table.setStyle(style)
-
     story.append(table)
     doc.build(story)
     return buffer.getvalue()
@@ -98,17 +151,23 @@ def dfs_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
             for j, col in enumerate(df.columns, start=1):
                 kind = _col_kind(str(col))
                 if kind == "money":
-                    fmt = '#.##0,00'
+                    fmt = '#,##0.00'
                 elif kind == "kilos":
-                    fmt = '#.##0,00'
+                    fmt = '#,##0.00'
                 elif kind == "qty":
-                    fmt = '#.##0'
+                    fmt = '#,##0'
                 else:
                     fmt = None
                 if fmt:
                     for i in range(2, ws.max_row + 1):
                         cell = ws.cell(i, j)
-                        if isinstance(cell.value, (int, float)):
+                        if isinstance(cell.value, numbers.Number):
+                            # Cantidades: forzar entero visible
+                            if kind == 'qty':
+                                try:
+                                    cell.value = int(round(float(cell.value)))
+                                except Exception:
+                                    pass
                             cell.number_format = fmt
             # Ajuste ancho columnas (según contenido)
             for j, col in enumerate(df.columns, start=1):
@@ -185,7 +244,7 @@ def df_to_template_excel_bytes(template_path: str, df: pd.DataFrame, sheet_name:
             return
 
         if isinstance(val, (int, float)):
-            # Alícuota con 3 decimales (10,500 / 21,000 / 0,000)
+            # Alícuota con 3 decimales (10,500 / 21,000 / 0.000)
             if "ALIC" in up:
                 cell.number_format = "0.000"
                 return
