@@ -7,7 +7,7 @@ import tempfile
 
 from src.parser import parse_pdf
 from src.processor import build_outputs
-from src.exporters import df_to_pdf_bytes, dfs_to_excel_bytes, df_to_template_excel_bytes
+from src.exporters import dfs_to_excel_bytes, df_to_template_excel_bytes
 
 # --- Rutas de assets ---
 HERE = Path(__file__).parent
@@ -222,13 +222,6 @@ if st.session_state.parsed_docs:
         st.subheader("Grilla de Ventas")
         dfv = outputs["ventas"]
         st.dataframe(style_df(dfv), use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar PDF Ventas",
-            data=df_to_pdf_bytes(dfv, title="Grilla de Ventas"),
-            file_name="ventas.pdf",
-            mime="application/pdf",
-            disabled=dfv.empty,
-        )
         # Libro ventas (Excel)
         st.subheader("Ventas - Excel")
         dflv = outputs["ventas_salida"]
@@ -245,23 +238,16 @@ if st.session_state.parsed_docs:
         st.subheader("Grilla de Compras")
         dfc = outputs["compras"]
         st.dataframe(style_df(dfc), use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar PDF Compras",
-            data=df_to_pdf_bytes(dfc, title="Grilla de Compras"),
-            file_name="compras.pdf",
-            mime="application/pdf",
-            disabled=dfc.empty,
-        )
 
 
         # Compras/Gastos (Excel)
-        st.subheader("Compras/Gastos - Excel")
+        st.subheader("Compras y Gastos - Excel")
         dfcg = outputs.get("compras_gastos_salida", pd.DataFrame())
         st.dataframe(style_df(dfcg), use_container_width=True, hide_index=True)
         st.download_button(
-            "Descargar Compras_Gastos.xlsx",
+            "Descargar Compras_y_Gastos.xlsx",
             data=df_to_template_excel_bytes(str(HERE / "templates" / "recibidos_salida.xlsx"), dfcg),
-            file_name="compras_gastos.xlsx",
+            file_name="compras_y_gastos.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             disabled=dfcg.empty,
         )
