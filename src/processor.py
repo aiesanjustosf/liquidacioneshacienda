@@ -353,8 +353,15 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
             base_g = (d.total_gastos or 0.0) * s_m
             iva_g = (d.iva_gastos or 0.0) * s_m
 
-            cpbte_g = "ND" if base_g >= 0 else "NC"
-            letra_g = "A"  # según tu regla general
+                        # En VENTAS los gastos se exportan como ND/NC según el signo.
+            # En COMPRAS (incluyendo ajustes de DÉBITO) se respeta el tipo original del comprobante (CD/LC/VC...).
+            if mov == "VENTA":
+                cpbte_g = "ND" if base_g >= 0 else "NC"
+                letra_g = "A"  # según tu regla general
+            else:
+                cpbte_g = d.tipo_interno
+                letra_g = d.letra
+  # según tu regla general
             alic_g = round((iva_g / base_g) * 100, 3) if base_g and iva_g else 0.0
 
             if (iva_g or 0.0) == 0.0:
