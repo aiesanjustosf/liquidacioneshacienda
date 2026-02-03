@@ -454,6 +454,134 @@ def parse_items(text: str) -> List[ItemHacienda]:
 
 
 
+def parse_items_from_pdf(pdf_path: str) -> List[ItemHacienda]:
+    """Extrae el detalle de animales desde la tabla del PDF usando pdfplumber.
+
+    Esta vía es la más confiable porque respeta columnas (evita mezclar 'Cliente' con 'Categoría/Raza').
+    Si no se encuentra la tabla, devuelve [] y el caller puede usar el fallback por texto.
+    """
+    items: List[ItemHacienda] = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            best_table = None
+            best_score = -1
+            for page in pdf.pages[:2]:
+                for t in page.extract_tables() or []:
+                    if not t or not t[0]:
+                        continue
+                    header = [(c or "").strip() for c in t[0]]
+                    header_join = " | ".join(header)
+                    if not re.search(r"Categor[ií]a\s*/\s*Raza", header_join, re.IGNORECASE):
+                        continue
+                    score = sum(
+                        1
+                        for h in header
+                        if re.search(
+                            r"(Cabezas|\bUM\b|Cantidad|\$\s*Bruto|%\s*IVA|\$\s*IVA|\$\s*UM|Cliente)",
+                            h,
+                            re.IGNORECASE,
+                        )
+                    )
+                    score = score * 100 + len(t)
+                    if score > best_score:
+                        best_score = score
+                        best_table = t
+
+            if not best_table:
+                return items
+
+            header = [(c or "").strip() for c in best_table[0]]
+
+            def idx_of(patterns):
+                for i, h in enumerate(header):
+                    for p in patterns:
+                        if re.search(p, h, re.IGNORECASE):
+                            return i
+                return None
+
+            idx_categoria = idx_of([r"Categor[ií]a\s*/\s*Raza"])
+            idx_cabezas = idx_of([r"\bCabezas\b"])
+            idx_um = idx_of([r"\bUM\b"])
+            idx_cantidad = idx_of([r"\bCantidad\b"])
+            idx_precio = idx_of([r"\$\s*UM", r"\$\s*U\.?M\.?"])
+            idx_bruto = idx_of([r"\$\s*Bruto", r"\bBruto\b"])
+            idx_iva_pct = idx_of([r"%\s*IVA", r"\bIVA\b\s*%"])
+            idx_iva_imp = idx_of([r"\$\s*IVA"])
+
+            if idx_categoria is None or idx_cabezas is None or idx_um is None or idx_bruto is None:
+                return items
+
+            for row in best_table[1:]:
+                if not row or idx_categoria >= len(row):
+                    continue
+                cat_raw = (row[idx_categoria] or "").strip()
+                if not cat_raw:
+                    continue
+
+                categoria = re.sub(r"\s+", " ", cat_raw).strip()
+                categoria = re.sub(r"^\s*\d{11}\s*-\s*", "", categoria).strip()
+
+                if re.search(
+                    r"\b(Comisi[oó]n|Gastos?|Base\s+Imponible|Alicuota|Al[ií]cuota|IVA\b|Importe\s+IVA)\b",
+                    categoria,
+                    re.IGNORECASE,
+                ):
+                    continue
+
+                cabezas = float(parse_int((row[idx_cabezas] or '').strip()) or 0)
+
+                um_raw = (row[idx_um] or "").strip()
+                um = re.sub(r"\s+", " ", um_raw).strip()
+                um = um.replace("Kg.", "Kg").replace("Kgs", "Kg")
+                if re.search(r"Kg\s*Vivo", um, re.IGNORECASE):
+                    um = "Kg Vivo"
+                elif re.search(r"\bCabeza\b", um, re.IGNORECASE):
+                    um = "Cabeza"
+                elif re.search(r"\bUN\b|Unidad|Unidades", um, re.IGNORECASE):
+                    um = "Unidad"
+
+                kilos = 0.0
+                if idx_cantidad is not None and idx_cantidad < len(row):
+                    kilos = float(parse_int((row[idx_cantidad] or '').strip()) or 0)
+
+                precio = 0.0
+                if idx_precio is not None and idx_precio < len(row):
+                    precio = float(parse_money((row[idx_precio] or '').strip()) or 0.0)
+
+                bruto = float(parse_money((row[idx_bruto] or '').strip()) or 0.0)
+
+                iva_pct = None
+                if idx_iva_pct is not None and idx_iva_pct < len(row):
+                    s = (row[idx_iva_pct] or "").strip()
+                    if s:
+                        try:
+                            iva_pct = float(s.replace(",", "").replace("%", ""))
+                        except Exception:
+                            iva_pct = None
+
+                iva_imp = None
+                if idx_iva_imp is not None and idx_iva_imp < len(row):
+                    s = (row[idx_iva_imp] or "").strip()
+                    iva_imp = float(parse_money(s) or 0.0) if s else None
+
+                items.append(
+                    ItemHacienda(
+                        categoria=categoria,
+                        cabezas=cabezas,
+                        kilos=kilos,
+                        um=um,
+                        precio=precio,
+                        bruto=bruto,
+                        iva_pct=iva_pct,
+                        iva_importe=iva_imp,
+                    )
+                )
+
+    except Exception:
+        return []
+
+    return items
+
 def parse_gastos(text: str) -> List[Gasto]:
     gastos: List[Gasto] = []
     m = re.search(r"Gastos\s+.*?\n(.*?)\nImporte Bruto:", text, re.IGNORECASE | re.DOTALL)
@@ -486,7 +614,7 @@ def parse_pdf(pdf_path: str) -> ParsedDoc:
     ajuste = detectar_ajuste(text)
     tipo_interno = tipo_interno_por_cod(cod_arca, text)
     tot = parse_totales(text)
-    items = parse_items(text)
+    items = parse_items_from_pdf(pdf_path) or parse_items(text)
     gastos = parse_gastos(text)
     retenciones = parse_retenciones(text)
 
