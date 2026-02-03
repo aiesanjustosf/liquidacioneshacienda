@@ -92,13 +92,10 @@ def build_outputs(docs: List[ParsedDoc], roles: Dict[str, Role]) -> Dict[str, pd
         # Para ajuste monetario (financiero), no tocamos cabezas/kilos, pero sí montos
         s_h = s_m if d.ajuste.afecta_cabezas_kilos else 1
 
-        # Contraparte (para grillas)
-        if mov == "VENTA":
-            contraparte = d.emisor if role == "RECEPTOR" else d.receptor
-        elif mov == "COMPRA":
-            contraparte = d.receptor if role == "EMISOR" else d.emisor
-        else:
-            contraparte = d.receptor
+        # Contraparte (para grillas): por tu regla, depende SOLO del rol de carga.
+        # - Subido como EMISOR  => Contraparte = RECEPTOR
+        # - Subido como RECEPTOR => Contraparte = EMISOR
+        contraparte = d.receptor if role == "EMISOR" else d.emisor
 
         # Neto sin gastos (según tu regla): base hacienda = Importe Bruto (sin IVA, sin gastos)
         neto_hacienda = (d.importe_bruto or 0.0) * s_m
